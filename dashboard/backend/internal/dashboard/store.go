@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"echobot/shared/model"
+	"xuanjian/shared/model"
 )
 
 type Release struct {

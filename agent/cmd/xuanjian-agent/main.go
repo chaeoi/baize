@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"echobot/agent/internal/agent"
-	"echobot/agent/internal/collector"
-	"echobot/agent/internal/config"
-	"echobot/shared/model"
+	"xuanjian/agent/internal/agent"
+	"xuanjian/agent/internal/collector"
+	"xuanjian/agent/internal/config"
+	"xuanjian/shared/model"
 )
 
 var version = "dev"

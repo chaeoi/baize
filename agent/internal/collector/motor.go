@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"echobot/agent/internal/config"
-	"echobot/shared/model"
 	"gopkg.in/yaml.v3"
+	"xuanjian/agent/internal/config"
+	"xuanjian/shared/model"
 )
 
 type jointStateMessage struct {

@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	dashboardconfig "echobot/dashboard/backend/internal/config"
-	"echobot/dashboard/backend/internal/dashboard"
+	dashboardconfig "xuanjian/dashboard/backend/internal/config"
+	"xuanjian/dashboard/backend/internal/dashboard"
 )
 
 var version = "dev"

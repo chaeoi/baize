@@ -13,8 +13,8 @@ import (
 	"time"
 	"unsafe"
 
-	"echobot/agent/internal/config"
-	"echobot/shared/model"
+	"xuanjian/agent/internal/config"
+	"xuanjian/shared/model"
 )
 
 const (

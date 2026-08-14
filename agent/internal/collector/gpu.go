@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"echobot/shared/model"
+	"xuanjian/shared/model"
 )
 
 var ErrNoGPU = errors.New("no NVIDIA GPU data available")

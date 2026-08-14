@@ -2,6 +2,6 @@
 /tmp/
 /output/
 /.playwright-cli/
-/echobot.yml
+/xuanjian.yml
 /.env
 *.log

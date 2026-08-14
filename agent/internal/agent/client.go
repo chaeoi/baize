@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"strings"
 
-	"echobot/shared/model"
+	"xuanjian/shared/model"
 )
 
 type Client struct {

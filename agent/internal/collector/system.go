@@ -13,7 +13,7 @@ import (
 	"sync"
 	"syscall"
 
-	"echobot/shared/model"
+	"xuanjian/shared/model"
 )
 
 type cpuTimes struct {

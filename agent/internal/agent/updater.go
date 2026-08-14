@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"syscall"
 
-	"echobot/shared/model"
+	"xuanjian/shared/model"
 )
 
 func ApplyUpdate(ctx context.Context, client *Client, update model.UpdateInfo) error {
@@ -30,7 +30,7 @@ func ApplyUpdate(ctx context.Context, client *Client, update model.UpdateInfo) e
 	if err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(executable), ".echobot-update-*")
+	temporary, err := os.CreateTemp(filepath.Dir(executable), ".xuanjian-update-*")
 	if err != nil {
 		return fmt.Errorf("create update next to executable: %w", err)
 	}

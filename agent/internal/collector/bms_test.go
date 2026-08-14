@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"echobot/agent/internal/config"
+	"xuanjian/agent/internal/config"
 )
 
 func TestParseSupportedBMSFrames(t *testing.T) {

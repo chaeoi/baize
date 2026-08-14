@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"echobot/shared/model"
+	"xuanjian/shared/model"
 )
 
 const (
@@ -131,17 +131,17 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 		s.mu.Lock()
 		s.sessions[sessionID] = expires
 		s.mu.Unlock()
-		http.SetCookie(writer, &http.Cookie{Name: "echobot_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: expires})
+		http.SetCookie(writer, &http.Cookie{Name: "xuanjian_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: expires})
 		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true})
 	case http.MethodDelete:
-		if cookie, err := request.Cookie("echobot_session"); err == nil {
+		if cookie, err := request.Cookie("xuanjian_session"); err == nil {
 			if claims, ok := s.parseSessionToken(cookie.Value); ok {
 				s.mu.Lock()
 				delete(s.sessions, claims.ID)
 				s.mu.Unlock()
 			}
 		}
-		http.SetCookie(writer, &http.Cookie{Name: "echobot_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		http.SetCookie(writer, &http.Cookie{Name: "xuanjian_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		writer.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(writer)
@@ -207,7 +207,7 @@ func (s *Server) updateFile(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writer.Header().Set("Content-Type", "application/octet-stream")
-	writer.Header().Set("Content-Disposition", `attachment; filename="echobot-agent"`)
+	writer.Header().Set("Content-Disposition", `attachment; filename="xuanjian-agent"`)
 	writer.Header().Set("X-Content-SHA256", release.SHA256)
 	http.ServeFile(writer, request, release.Filename)
 }
@@ -403,7 +403,7 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) validSession(request *http.Request) bool {
-	cookie, err := request.Cookie("echobot_session")
+	cookie, err := request.Cookie("xuanjian_session")
 	if err != nil {
 		return false
 	}
