@@ -9,7 +9,6 @@ on:
       - agent/cmd/**
       - agent/internal/**
       - agent/deploy/**
-      - agent/echobot.yml.example
       - shared/model/**
       - .github/workflows/agent-release.yml
   workflow_dispatch:
@@ -50,7 +49,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/echobot.yml.example shared/model .github/workflows/agent-release.yml)
+          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy shared/model .github/workflows/agent-release.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
           echo "version=$(date -u -d "$commit_date" +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
@@ -100,7 +99,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/echobot.yml.example shared/model .github/workflows/agent-release.yml)
+          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy shared/model .github/workflows/agent-release.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
           version="$(date -u -d "$commit_date" +%Y%m%d)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -134,8 +133,7 @@ jobs:
             dist/echobot-agent-linux-amd64 \
             dist/echobot-agent-linux-arm64 \
             dist/SHA256SUMS \
-            agent/echobot.yml.example \
             --target "$GITHUB_SHA" \
             --title "EchoBot Agent $VERSION" \
-            --notes "EchoBot Agent 日期版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态二进制、SHA256SUMS 和 YAML 配置示例。" \
+            --notes "EchoBot Agent 日期版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态二进制和 SHA256SUMS。配置示例保留在源码仓库中。" \
             --latest

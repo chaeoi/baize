@@ -21,10 +21,10 @@ agent-amd64:
 
 dashboard:
 	mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o dist/echobot-dashboard-linux-amd64 ./dashboard/backend/cmd/echobot-dashboard
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o dist/echobot-linux-amd64 ./dashboard/backend/cmd/echobot
 
 docker:
 	docker build --build-arg VERSION=$(VERSION) -t echobot:$(VERSION) -f dashboard/backend/Dockerfile .
 
 clean:
-	rm -f dist/echobot-agent-* dist/echobot-dashboard-*
+	rm -f dist/echobot-agent-* dist/echobot-*

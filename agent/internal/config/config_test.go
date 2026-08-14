@@ -7,7 +7,7 @@ import (
 )
 
 func TestRobotProfileDefaultsAndOverrides(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "echobot.yml")
+	path := filepath.Join(t.TempDir(), "config.yml")
 	data := []byte(`agent:
   uuid: 7fd34256-bf3a-4cf6-8da0-fbce40f34d11
   robot_code: TEST
