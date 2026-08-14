@@ -4,31 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#15191e">
-  <title>EchoBot 机器人监控</title>
+  <title>玄鉴 Xuanjian 机器人监控</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div id="login-view" class="login-view hidden">
-    <form id="login-form" class="login-form">
-      <div class="brand-mark" aria-hidden="true"><i data-lucide="activity"></i></div>
-      <h1>EchoBot</h1>
-      <p>机器人监控面板</p>
-      <input id="username" name="username" type="text" value="admin" autocomplete="username" hidden>
-      <label for="password">管理密码</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
-      <button class="button primary full" type="submit"><i data-lucide="log-in"></i><span>登录</span></button>
-      <div id="login-error" class="form-error" role="alert"></div>
-    </form>
-  </div>
-
   <div id="app-view" class="app-shell hidden">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark"><i data-lucide="activity"></i></span><strong>EchoBot</strong><span>机器人监控</span></div>
+      <div class="brand"><span class="brand-mark"><i data-lucide="activity"></i></span><strong>玄鉴</strong><span>Xuanjian 机器人监控</span></div>
+      <nav class="view-switch" aria-label="界面模式">
+        <button class="view-switch-button active" data-view="display" type="button"><i data-lucide="monitor"></i><span>展示</span></button>
+        <button class="view-switch-button" data-view="settings" type="button"><i data-lucide="settings"></i><span>设置</span></button>
+      </nav>
       <div class="topbar-actions">
         <span id="clock" class="clock"></span>
         <button id="refresh-button" class="icon-button" type="button" title="刷新"><i data-lucide="refresh-cw"></i></button>
-        <button id="release-button" class="button subtle" type="button"><i data-lucide="package"></i><span>版本</span></button>
-        <button id="logout-button" class="icon-button" type="button" title="退出"><i data-lucide="log-out"></i></button>
+        <button id="logout-button" class="icon-button hidden" type="button" title="退出设置"><i data-lucide="log-out"></i></button>
       </div>
     </header>
 
@@ -43,36 +33,33 @@
       </aside>
 
       <main class="main-content">
-        <section id="empty-state" class="empty-state">
-          <i data-lucide="bot"></i><strong>暂无机器人数据</strong><span>等待 agent 首次上报</span>
-        </section>
-
-        <div id="robot-detail" class="robot-detail hidden">
-          <section class="robot-header">
-            <div class="robot-heading">
-              <div class="status-beacon" id="detail-beacon"></div>
-              <div><div class="title-line"><h1 id="robot-code">-</h1><span id="robot-status" class="status-label">离线</span></div><div id="robot-identity" class="identity-line"></div></div>
-            </div>
-            <div class="header-actions">
-              <button id="remark-button" class="button subtle" type="button"><i data-lucide="pencil"></i><span>备注</span></button>
-              <button id="update-button" class="button primary" type="button"><i data-lucide="download"></i><span>更新 Agent</span></button>
-            </div>
+        <div id="display-view">
+          <section id="empty-state" class="empty-state">
+            <i data-lucide="bot"></i><strong>暂无机器人数据</strong><span>等待 agent 首次上报</span>
           </section>
 
-          <section class="meta-strip">
-            <div><span>备注</span><strong id="robot-remark">-</strong></div>
-            <div><span>Agent</span><strong id="agent-version">-</strong></div>
-            <div><span>目标版本</span><strong id="desired-version">跟随配置</strong></div>
-            <div><span>最后上报</span><strong id="last-seen">-</strong></div>
-          </section>
+          <div id="robot-detail" class="robot-detail hidden">
+            <section class="robot-header">
+              <div class="robot-heading">
+                <div class="status-beacon" id="detail-beacon"></div>
+                <div><div class="title-line"><h1 id="robot-code">-</h1><span id="robot-status" class="status-label">离线</span></div><div id="robot-identity" class="identity-line"></div></div>
+              </div>
+            </section>
 
-          <nav class="tabs" aria-label="机器人数据视图">
-            <button class="tab active" data-tab="overview" type="button">概览</button>
-            <button class="tab" data-tab="motors" type="button">电机 <span id="motor-count">0</span></button>
-            <button class="tab" data-tab="diagnostics" type="button">诊断 <span id="error-count">0</span></button>
-          </nav>
+            <section class="meta-strip">
+              <div><span>备注</span><strong id="robot-remark">-</strong></div>
+              <div><span>Agent</span><strong id="agent-version">-</strong></div>
+              <div><span>目标版本</span><strong id="desired-version">跟随配置</strong></div>
+              <div><span>最后上报</span><strong id="last-seen">-</strong></div>
+            </section>
 
-          <div id="tab-overview" class="tab-view">
+            <nav class="tabs" aria-label="机器人数据视图">
+              <button class="tab active" data-tab="overview" type="button">概览</button>
+              <button class="tab" data-tab="motors" type="button">电机 <span id="motor-count">0</span></button>
+              <button class="tab" data-tab="diagnostics" type="button">诊断 <span id="error-count">0</span></button>
+            </nav>
+
+            <div id="tab-overview" class="tab-view">
             <section class="metric-grid">
               <article class="metric-block"><div class="metric-label"><i data-lucide="cpu"></i><span>CPU</span></div><strong id="cpu-value">-</strong><div class="meter"><span id="cpu-meter"></span></div><small id="cpu-sub">-</small></article>
               <article class="metric-block"><div class="metric-label"><i data-lucide="memory-stick"></i><span>内存</span></div><strong id="memory-value">-</strong><div class="meter"><span id="memory-meter"></span></div><small id="memory-sub">-</small></article>
@@ -94,9 +81,9 @@
                 <dl id="bms-facts" class="fact-list"></dl>
               </div>
             </section>
-          </div>
+            </div>
 
-          <div id="tab-motors" class="tab-view hidden">
+            <div id="tab-motors" class="tab-view hidden">
             <section class="motor-summary">
               <div><span>数据源</span><strong id="motor-source">-</strong></div>
               <div><span>Topic</span><strong id="motor-topic">-</strong></div>
@@ -107,15 +94,65 @@
             <div class="table-wrap">
               <table><thead><tr><th>电机</th><th>关节</th><th>品牌 / 型号</th><th>CAN</th><th>模式</th><th>位置 rad</th><th>速度 rad/s</th><th>估算扭矩 Nm</th></tr></thead><tbody id="motor-table"></tbody></table>
             </div>
-          </div>
+            </div>
 
-          <div id="tab-diagnostics" class="tab-view hidden">
-            <div id="diagnostic-list" class="diagnostic-list"></div>
+            <div id="tab-diagnostics" class="tab-view hidden">
+              <div id="diagnostic-list" class="diagnostic-list"></div>
+            </div>
           </div>
         </div>
+
+        <section id="settings-view" class="settings-view hidden">
+          <header class="settings-header">
+            <div><span class="eyebrow">后台管理</span><h1>设置</h1></div>
+            <span class="session-badge"><i data-lucide="shield-check"></i><span id="settings-session">admin</span></span>
+          </header>
+          <div class="settings-content">
+            <section class="settings-section">
+              <div class="section-heading"><h2>机器人管理</h2><i data-lucide="bot"></i></div>
+              <div id="settings-robot-empty" class="empty-line">请从左侧选择机器人</div>
+              <div id="settings-robot-panel" class="settings-robot-panel hidden">
+                <div class="settings-robot-summary">
+                  <div><strong id="settings-robot-code">-</strong><span id="settings-robot-identity">-</span></div>
+                  <span id="settings-robot-status" class="status-label">离线</span>
+                </div>
+                <dl id="settings-robot-facts" class="fact-list"></dl>
+                <div class="settings-actions">
+                  <button id="remark-button" class="button subtle" type="button"><i data-lucide="pencil"></i><span>编辑备注</span></button>
+                  <button id="update-button" class="button primary" type="button"><i data-lucide="download"></i><span>指定 Agent 版本</span></button>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-section settings-releases">
+              <div class="section-heading"><h2>Agent 版本</h2><i data-lucide="package"></i></div>
+              <div class="settings-section-body">
+                <form id="release-form" class="upload-form">
+                  <label>版本<input name="version" placeholder="20260814" required></label>
+                  <label>系统<select name="os"><option value="linux">linux</option></select></label>
+                  <label>架构<select name="arch"><option value="arm64">arm64</option><option value="amd64">amd64</option></select></label>
+                  <label class="file-label">二进制<input name="binary" type="file" required></label>
+                  <button class="button primary" type="submit"><i data-lucide="upload"></i><span>上传</span></button>
+                </form>
+                <div id="release-list" class="release-list"></div>
+              </div>
+            </section>
+          </div>
+        </section>
       </main>
     </div>
   </div>
+
+  <dialog id="login-dialog">
+    <form id="login-form" class="dialog-form login-form">
+      <div class="dialog-heading"><div><span class="eyebrow">后台管理</span><h2>进入设置</h2></div><button class="icon-button dialog-close" type="button" title="关闭"><i data-lucide="x"></i></button></div>
+      <input id="username" name="username" type="text" value="admin" autocomplete="username" hidden>
+      <label for="password">管理密码</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button class="button primary full" type="submit"><i data-lucide="log-in"></i><span>登录</span></button>
+      <div id="login-error" class="form-error" role="alert"></div>
+    </form>
+  </dialog>
 
   <dialog id="remark-dialog">
     <form id="remark-form" class="dialog-form">
@@ -131,20 +168,6 @@
       <label for="update-version">版本</label><select id="update-version" required></select>
       <div class="dialog-actions"><button id="clear-update-button" class="button danger" type="button"><i data-lucide="rotate-ccw"></i><span>清除指定</span></button><span class="action-spacer"></span><button class="button subtle dialog-close" type="button">取消</button><button class="button primary" type="submit"><i data-lucide="download"></i><span>下发更新</span></button></div>
     </form>
-  </dialog>
-
-  <dialog id="release-dialog" class="wide-dialog">
-    <div class="dialog-form">
-      <div class="dialog-heading"><div><span class="eyebrow">版本仓库</span><h2>Agent 二进制</h2></div><button class="icon-button dialog-close" type="button" title="关闭"><i data-lucide="x"></i></button></div>
-      <form id="release-form" class="upload-form">
-        <label>版本<input name="version" placeholder="1.0.0" required></label>
-        <label>系统<select name="os"><option value="linux">linux</option></select></label>
-        <label>架构<select name="arch"><option value="arm64">arm64</option><option value="amd64">amd64</option></select></label>
-        <label class="file-label">二进制<input name="binary" type="file" required></label>
-        <button class="button primary" type="submit"><i data-lucide="upload"></i><span>上传</span></button>
-      </form>
-      <div id="release-list" class="release-list"></div>
-    </div>
   </dialog>
 
   <div id="toast" class="toast" role="status"></div>

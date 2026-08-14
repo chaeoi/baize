@@ -60,6 +60,7 @@ func NewServer(cfg ServerConfig, store *Store) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.health)
 	mux.HandleFunc("/api/v1/session", server.session)
+	mux.HandleFunc("/api/v1/robots", server.robots)
 	mux.HandleFunc("/api/v1/telemetry", server.requireAgent(server.telemetry))
 	mux.HandleFunc("/api/v1/update/check", server.requireAgent(server.updateCheck))
 	mux.HandleFunc("/api/v1/update/files/", server.requireAgent(server.updateFile))
@@ -102,11 +103,7 @@ func (s *Server) health(writer http.ResponseWriter, _ *http.Request) {
 func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
-		if !s.validSession(request) {
-			writeJSON(writer, http.StatusOK, map[string]any{"authenticated": false, "username": s.config.AdminUser})
-			return
-		}
-		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true})
+		writeJSON(writer, http.StatusOK, map[string]any{"authenticated": s.validSession(request), "username": s.config.AdminUser})
 	case http.MethodPost:
 		var body struct {
 			Username string `json:"username"`

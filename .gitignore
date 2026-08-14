@@ -1,5 +1,6 @@
 /dist/
 /tmp/
+/output/
 /.playwright-cli/
 /echobot.yml
 /.env

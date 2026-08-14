@@ -1,4 +1,4 @@
-const state = { robots: [], releases: [], selected: null, tab: 'overview', timer: null };
+const state = { robots: [], releases: [], selected: null, tab: 'overview', timer: null, authenticated: false, view: 'display', adminUser: 'admin' };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -7,35 +7,43 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindEvents();
   updateClock();
   setInterval(updateClock, 1000);
+  showApp();
   try {
     const session = await api('/api/v1/session');
-    if (session.username) $('#username').value = session.username;
-    session.authenticated ? showApp() : showLogin();
-  } catch {
-    showLogin();
-  }
+    if (session.username) {
+      state.adminUser = session.username;
+      $('#username').value = session.username;
+    }
+    state.authenticated = Boolean(session.authenticated);
+  } catch {}
+  syncAuthUI();
+  await refresh();
 });
 
 function bindEvents() {
   $('#login-form').addEventListener('submit', login);
   $('#logout-button').addEventListener('click', logout);
   $('#refresh-button').addEventListener('click', refresh);
+  $$('.view-switch-button').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
   $('#robot-search').addEventListener('input', renderRobotList);
   $('#remark-button').addEventListener('click', openRemark);
   $('#remark-form').addEventListener('submit', saveRemark);
   $('#update-button').addEventListener('click', openUpdate);
   $('#update-form').addEventListener('submit', assignUpdate);
   $('#clear-update-button').addEventListener('click', clearUpdate);
-  $('#release-button').addEventListener('click', openReleases);
   $('#release-form').addEventListener('submit', uploadRelease);
   $$('.dialog-close').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
   $$('.tab').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tab)));
 }
 
-async function api(path, options = {}) {
+async function api(path, options = {}, requiresLogin = false) {
   const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...options.headers } });
-  if (response.status === 401) {
-    showLogin();
+  if (response.status === 401 && requiresLogin) {
+    state.authenticated = false;
+    state.releases = [];
+    syncAuthUI();
+    setView('display');
+    openLogin();
     throw new Error('登录已失效');
   }
   if (!response.ok) {
@@ -52,7 +60,10 @@ async function login(event) {
   try {
     await api('/api/v1/session', { method: 'POST', body: JSON.stringify({ username: $('#username').value, password: $('#password').value }) });
     $('#password').value = '';
-    showApp();
+    state.authenticated = true;
+    $('#login-dialog').close();
+    syncAuthUI();
+    await setView('settings');
   } catch (error) {
     $('#login-error').textContent = error.message;
   }
@@ -60,29 +71,33 @@ async function login(event) {
 
 async function logout() {
   try { await api('/api/v1/session', { method: 'DELETE' }); } catch {}
-  showLogin();
+  state.authenticated = false;
+  state.releases = [];
+  syncAuthUI();
+  await setView('display');
 }
 
-function showLogin() {
-  clearInterval(state.timer);
-  $('#app-view').classList.add('hidden');
-  $('#login-view').classList.remove('hidden');
+function openLogin() {
+  $('#login-error').textContent = '';
+  const dialog = $('#login-dialog');
+  if (!dialog.open) dialog.showModal();
   setTimeout(() => $('#password').focus(), 0);
 }
 
 function showApp() {
-  $('#login-view').classList.add('hidden');
   $('#app-view').classList.remove('hidden');
-  refresh();
   clearInterval(state.timer);
   state.timer = setInterval(refresh, 3000);
 }
 
 async function refresh() {
   try {
-    const [robotData, releaseData] = await Promise.all([api('/api/v1/admin/robots'), api('/api/v1/admin/releases')]);
+    const robotData = await api('/api/v1/robots');
     state.robots = robotData.robots || [];
-    state.releases = releaseData.releases || [];
+    if (state.authenticated && state.view === 'settings') {
+      const releaseData = await api('/api/v1/admin/releases', {}, true);
+      state.releases = releaseData.releases || [];
+    }
     if (!state.selected || !state.robots.some(robot => robot.uuid === state.selected)) state.selected = state.robots[0]?.uuid || null;
     render();
   } catch (error) {
@@ -90,8 +105,26 @@ async function refresh() {
   }
 }
 
+async function setView(view) {
+  if (view === 'settings' && !state.authenticated) {
+    openLogin();
+    return;
+  }
+  state.view = view;
+  $$('.view-switch-button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
+  $('#display-view').classList.toggle('hidden', view !== 'display');
+  $('#settings-view').classList.toggle('hidden', view !== 'settings');
+  if (view === 'settings') await refresh(); else render();
+}
+
+function syncAuthUI() {
+  $('#logout-button').classList.toggle('hidden', !state.authenticated);
+  $('#settings-session').textContent = state.adminUser;
+}
+
 function render() {
   renderRobotList();
+  renderSettings();
   const robot = selectedRobot();
   $('#empty-state').classList.toggle('hidden', Boolean(robot));
   $('#robot-detail').classList.toggle('hidden', !robot);
@@ -109,6 +142,30 @@ function render() {
   renderMetrics(robot.telemetry || {});
   renderMotors(robot.telemetry?.motors);
   renderDiagnostics(robot.telemetry?.errors || []);
+}
+
+function renderSettings() {
+  if (state.view !== 'settings') return;
+  const robot = selectedRobot();
+  $('#settings-robot-empty').classList.toggle('hidden', Boolean(robot));
+  $('#settings-robot-panel').classList.toggle('hidden', !robot);
+  renderReleases();
+  if (!robot) return;
+  const online = isOnline(robot);
+  $('#settings-robot-code').textContent = robot.code;
+  $('#settings-robot-identity').textContent = `${robot.hostname} · ${robot.uuid}`;
+  $('#settings-robot-status').textContent = online ? '在线' : '离线';
+  $('#settings-robot-status').classList.toggle('online', online);
+  $('#settings-robot-facts').innerHTML = facts([
+    ['配置', robot.model || '-'],
+    ['平台', `${robot.os}/${robot.arch}`],
+    ['Agent', robot.agent_version || '-'],
+    ['目标版本', robot.desired_version || '跟随配置'],
+    ['备注', robot.remark || '-'],
+    ['最后上报', relativeTime(robot.last_seen)]
+  ]);
+  const hasRelease = state.releases.some(release => release.os === robot.os && release.arch === robot.arch);
+  $('#update-button').disabled = !hasRelease;
 }
 
 function renderRobotList() {
@@ -202,7 +259,7 @@ function openRemark() {
 async function saveRemark(event) {
   event.preventDefault(); const robot = selectedRobot(); if (!robot) return;
   try {
-    await api(`/api/v1/admin/robots/${robot.uuid}/remark`, { method: 'PATCH', body: JSON.stringify({ remark: $('#remark-input').value }) });
+    await api(`/api/v1/admin/robots/${robot.uuid}/remark`, { method: 'PATCH', body: JSON.stringify({ remark: $('#remark-input').value }) }, true);
     $('#remark-dialog').close(); toast('备注已保存'); await refresh();
   } catch (error) { toast(error.message, true); }
 }
@@ -221,7 +278,7 @@ function openUpdate() {
 async function assignUpdate(event) {
   event.preventDefault(); const robot = selectedRobot(); if (!robot) return;
   try {
-    await api(`/api/v1/admin/robots/${robot.uuid}/update`, { method: 'POST', body: JSON.stringify({ version: $('#update-version').value }) });
+    await api(`/api/v1/admin/robots/${robot.uuid}/update`, { method: 'POST', body: JSON.stringify({ version: $('#update-version').value }) }, true);
     $('#update-dialog').close(); toast('更新任务已下发'); await refresh();
   } catch (error) { toast(error.message, true); }
 }
@@ -229,12 +286,10 @@ async function assignUpdate(event) {
 async function clearUpdate() {
   const robot = selectedRobot(); if (!robot) return;
   try {
-    await api(`/api/v1/admin/robots/${robot.uuid}/update`, { method: 'DELETE' });
+    await api(`/api/v1/admin/robots/${robot.uuid}/update`, { method: 'DELETE' }, true);
     $('#update-dialog').close(); toast('已清除指定版本'); await refresh();
   } catch (error) { toast(error.message, true); }
 }
-
-function openReleases() { renderReleases(); $('#release-dialog').showModal(); }
 
 function renderReleases() {
   $('#release-list').innerHTML = state.releases.map(release => `<div class="release-row"><strong>${escapeHTML(release.version)}</strong><span>${release.os}/${release.arch}</span><code>${release.sha256.slice(0, 12)}</code><span>${bytes(release.size)}</span><button class="icon-button delete-release" data-id="${escapeHTML(release.id)}" title="删除" type="button"><i data-lucide="trash-2"></i></button></div>`).join('') || '<div class="empty-line">暂无版本</div>';
@@ -245,13 +300,13 @@ function renderReleases() {
 async function uploadRelease(event) {
   event.preventDefault();
   try {
-    await api('/api/v1/admin/releases', { method: 'POST', body: new FormData(event.currentTarget) });
+    await api('/api/v1/admin/releases', { method: 'POST', body: new FormData(event.currentTarget) }, true);
     event.currentTarget.reset(); toast('版本上传完成'); await refresh(); renderReleases();
   } catch (error) { toast(error.message, true); }
 }
 
 async function deleteRelease(id) {
-  try { await api(`/api/v1/admin/releases/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('版本已删除'); await refresh(); renderReleases(); }
+  try { await api(`/api/v1/admin/releases/${encodeURIComponent(id)}`, { method: 'DELETE' }, true); toast('版本已删除'); await refresh(); renderReleases(); }
   catch (error) { toast(error.message, true); }
 }
 

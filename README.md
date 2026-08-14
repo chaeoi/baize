@@ -1,6 +1,6 @@
-# EchoBot
+# 玄鉴 Xuanjian
 
-EchoBot 由机器人端 Agent 和管理 Dashboard 组成。Agent 负责采集状态并向 Dashboard 上报；Dashboard 负责查看机器人、保存备注和分发 Agent 更新。
+玄鉴由机器人端 Agent 和管理 Dashboard 组成。Agent 负责采集状态并向 Dashboard 上报；Dashboard 负责查看机器人、保存备注和分发 Agent 更新。
 
 ## 目录
 

@@ -134,6 +134,6 @@ jobs:
             dist/echobot-agent-linux-arm64 \
             dist/SHA256SUMS \
             --target "$GITHUB_SHA" \
-            --title "EchoBot Agent $VERSION" \
-            --notes "EchoBot Agent 日期版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态二进制和 SHA256SUMS。配置示例保留在源码仓库中。" \
+            --title "Xuanjian Agent $VERSION" \
+            --notes "玄鉴 Agent 日期版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态二进制和 SHA256SUMS。配置示例保留在源码仓库中。" \
             --latest
