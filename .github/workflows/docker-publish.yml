@@ -1,0 +1,92 @@
+name: 发布 Docker 镜像
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - go.mod
+      - go.sum
+      - dashboard/backend/**
+      - dashboard/frontend/**
+      - shared/model/**
+      - .github/workflows/docker-publish.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - go.mod
+      - go.sum
+      - dashboard/backend/**
+      - dashboard/frontend/**
+      - shared/model/**
+      - .github/workflows/docker-publish.yml
+  workflow_dispatch:
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: 构建并发布镜像
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 计算日期版本
+        id: image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          dashboard_paths=(go.mod go.sum dashboard/backend dashboard/frontend shared/model .github/workflows/docker-publish.yml)
+          commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${dashboard_paths[@]}")"
+          version="$(date -u -d "$commit_date" +%Y%m%d)"
+          image_name="${DOCKERHUB_USERNAME:-${GITHUB_REPOSITORY_OWNER,,}}/echobot"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image_name=$image_name" >> "$GITHUB_OUTPUT"
+
+      - name: 校验 Docker Hub 密钥
+        if: github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DOCKERHUB_USERNAME"
+          test -n "$DOCKERHUB_TOKEN"
+
+      - name: 设置 QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: 登录 Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 构建镜像并发布
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./dashboard/backend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ steps.image.outputs.image_name }}:latest
+            ${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.image.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
