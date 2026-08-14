@@ -23,7 +23,7 @@ import (
 var version = "dev"
 
 func main() {
-	configPath := flag.String("config", "echobot.yml", "path to the agent YAML config")
+	configPath := flag.String("config", "config.yml", "path to the agent YAML config")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	checkConfig := flag.Bool("check-config", false, "validate config and exit")
 	flag.Parse()

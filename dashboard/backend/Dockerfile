@@ -11,20 +11,17 @@ ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} ALL_PROXY=${ALL_PROXY} N
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
-COPY dashboard/backend/cmd/echobot-dashboard ./dashboard/backend/cmd/echobot-dashboard
+COPY dashboard/backend/cmd/echobot ./dashboard/backend/cmd/echobot
+COPY dashboard/backend/internal/config ./dashboard/backend/internal/config
 COPY dashboard/backend/internal/dashboard ./dashboard/backend/internal/dashboard
 COPY shared/model ./shared/model
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/echobot-dashboard ./dashboard/backend/cmd/echobot-dashboard
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/echobot ./dashboard/backend/cmd/echobot
 
 FROM ${RUNTIME_IMAGE}
-RUN mkdir -p /opt/echobot/dashboard/data
-COPY --from=backend-builder /out/echobot-dashboard /opt/echobot/dashboard/bin/echobot-dashboard
+RUN mkdir -p /data /config
+COPY --from=backend-builder /out/echobot /opt/echobot/dashboard/bin/echobot
 COPY dashboard/frontend /opt/echobot/dashboard/frontend
-USER root
-ENV DASHBOARD_LISTEN=:8080
-ENV DASHBOARD_DATA_DIR=/opt/echobot/dashboard/data
-ENV DASHBOARD_FRONTEND_DIR=/opt/echobot/dashboard/frontend
+COPY dashboard/config.yml /config/config.example.yml
 EXPOSE 8080
-VOLUME ["/opt/echobot/dashboard/data"]
-HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 CMD if [ -n "$DASHBOARD_TLS_CERT" ]; then wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8080/healthz; else wget -q -O /dev/null http://127.0.0.1:8080/healthz; fi
-ENTRYPOINT ["/opt/echobot/dashboard/bin/echobot-dashboard"]
+VOLUME ["/data"]
+ENTRYPOINT ["/opt/echobot/dashboard/bin/echobot"]

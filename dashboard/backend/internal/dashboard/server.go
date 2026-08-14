@@ -2,9 +2,11 @@ package dashboard
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -39,8 +41,9 @@ var (
 
 type ServerConfig struct {
 	AgentToken    string
+	AdminUser     string
 	AdminPassword string
-	AllowedOrigin string
+	JWTSecret     string
 	FrontendDir   string
 }
 
@@ -70,7 +73,7 @@ func NewServer(cfg ServerConfig, store *Store) *Server {
 	if cfg.FrontendDir != "" {
 		mux.HandleFunc("/", server.frontend)
 	}
-	server.handler = server.securityHeaders(server.cors(mux))
+	server.handler = server.securityHeaders(mux)
 	return server
 }
 
@@ -100,38 +103,46 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
 		if !s.validSession(request) {
-			writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": false})
+			writeJSON(writer, http.StatusOK, map[string]any{"authenticated": false, "username": s.config.AdminUser})
 			return
 		}
 		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true})
 	case http.MethodPost:
 		var body struct {
+			Username string `json:"username"`
 			Password string `json:"password"`
 		}
 		if err := decodeJSON(writer, request, &body, 4096); err != nil {
 			return
 		}
-		if !secureEqual(body.Password, s.config.AdminPassword) {
+		if !secureEqual(body.Username, s.config.AdminUser) || !secureEqual(body.Password, s.config.AdminPassword) {
 			time.Sleep(300 * time.Millisecond)
 			writeError(writer, http.StatusUnauthorized, "invalid password")
 			return
 		}
-		token, err := randomToken()
+		sessionID, err := randomToken()
 		if err != nil {
 			writeError(writer, http.StatusInternalServerError, "create session")
 			return
 		}
 		expires := time.Now().Add(12 * time.Hour)
+		token, err := s.createSessionToken(sessionID, expires)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, "create session")
+			return
+		}
 		s.mu.Lock()
-		s.sessions[token] = expires
+		s.sessions[sessionID] = expires
 		s.mu.Unlock()
-		http.SetCookie(writer, &http.Cookie{Name: "echobot_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: request.TLS != nil || request.Header.Get("X-Forwarded-Proto") == "https", Expires: expires})
+		http.SetCookie(writer, &http.Cookie{Name: "echobot_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: expires})
 		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true})
 	case http.MethodDelete:
 		if cookie, err := request.Cookie("echobot_session"); err == nil {
-			s.mu.Lock()
-			delete(s.sessions, cookie.Value)
-			s.mu.Unlock()
+			if claims, ok := s.parseSessionToken(cookie.Value); ok {
+				s.mu.Lock()
+				delete(s.sessions, claims.ID)
+				s.mu.Unlock()
+			}
 		}
 		http.SetCookie(writer, &http.Cookie{Name: "echobot_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		writer.WriteHeader(http.StatusNoContent)
@@ -399,32 +410,60 @@ func (s *Server) validSession(request *http.Request) bool {
 	if err != nil {
 		return false
 	}
+	claims, ok := s.parseSessionToken(cookie.Value)
+	if !ok {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	expires, ok := s.sessions[cookie.Value]
-	if !ok || time.Now().After(expires) {
-		delete(s.sessions, cookie.Value)
+	expires, ok := s.sessions[claims.ID]
+	if !ok || time.Now().After(expires) || claims.ExpiresAt <= time.Now().Unix() {
+		delete(s.sessions, claims.ID)
 		return false
 	}
 	return true
 }
 
-func (s *Server) cors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		origin := request.Header.Get("Origin")
-		if s.config.AllowedOrigin != "" && origin == s.config.AllowedOrigin {
-			writer.Header().Set("Access-Control-Allow-Origin", origin)
-			writer.Header().Set("Access-Control-Allow-Credentials", "true")
-			writer.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			writer.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-			writer.Header().Add("Vary", "Origin")
-		}
-		if request.Method == http.MethodOptions {
-			writer.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(writer, request)
-	})
+type sessionClaims struct {
+	ID        string `json:"jti"`
+	ExpiresAt int64  `json:"exp"`
+	IssuedAt  int64  `json:"iat"`
+}
+
+func (s *Server) createSessionToken(id string, expires time.Time) (string, error) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	claims, err := json.Marshal(sessionClaims{ID: id, ExpiresAt: expires.Unix(), IssuedAt: time.Now().Unix()})
+	if err != nil {
+		return "", err
+	}
+	payload := base64.RawURLEncoding.EncodeToString(claims)
+	input := header + "." + payload
+	mac := hmac.New(sha256.New, []byte(s.config.JWTSecret))
+	_, _ = mac.Write([]byte(input))
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return input + "." + signature, nil
+}
+
+func (s *Server) parseSessionToken(token string) (sessionClaims, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return sessionClaims{}, false
+	}
+	mac := hmac.New(sha256.New, []byte(s.config.JWTSecret))
+	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(signature, mac.Sum(nil)) {
+		return sessionClaims{}, false
+	}
+	claimsData, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return sessionClaims{}, false
+	}
+	var claims sessionClaims
+	if err := json.Unmarshal(claimsData, &claims); err != nil || claims.ID == "" || claims.ExpiresAt <= 0 {
+		return sessionClaims{}, false
+	}
+	return claims, true
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {

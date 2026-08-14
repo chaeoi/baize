@@ -8,7 +8,7 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/echobot/agent
-ExecStart=/opt/echobot/agent/echobot-agent -config /opt/echobot/agent/echobot.yml
+ExecStart=/opt/echobot/agent/echobot-agent -config /opt/echobot/agent/config.yml
 Restart=always
 RestartSec=3
 

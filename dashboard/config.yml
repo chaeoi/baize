@@ -1,0 +1,9 @@
+dashboard:
+  # Empty secrets are generated on first startup and written back to config.yml.
+  agent_token: ""
+  admin_user: "admin"
+  admin_password: ""
+  jwt_secret: ""
+  listen: ":8080"
+  data_dir: "/data"
+  frontend_dir: "/opt/echobot/dashboard/frontend"

@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setInterval(updateClock, 1000);
   try {
     const session = await api('/api/v1/session');
+    if (session.username) $('#username').value = session.username;
     session.authenticated ? showApp() : showLogin();
   } catch {
     showLogin();
@@ -49,7 +50,7 @@ async function login(event) {
   event.preventDefault();
   $('#login-error').textContent = '';
   try {
-    await api('/api/v1/session', { method: 'POST', body: JSON.stringify({ password: $('#password').value }) });
+    await api('/api/v1/session', { method: 'POST', body: JSON.stringify({ username: $('#username').value, password: $('#password').value }) });
     $('#password').value = '';
     showApp();
   } catch (error) {
