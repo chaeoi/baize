@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"xuanjian/agent/internal/config"
+	"baize/agent/internal/config"
 )
 
 func TestParseSupportedBMSFrames(t *testing.T) {

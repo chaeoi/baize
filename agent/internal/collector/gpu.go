@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"xuanjian/shared/model"
+	"baize/shared/model"
 )
 
 var ErrNoGPU = errors.New("no NVIDIA GPU data available")

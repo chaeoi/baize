@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 
-	"xuanjian/agent/internal/config"
-	"xuanjian/shared/model"
+	"baize/agent/internal/config"
+	"baize/shared/model"
 )
 
 func PublishBMSROS2(ctx context.Context, cfg config.BMSConfig, metrics model.BMSMetrics) error {

@@ -12,19 +12,19 @@ build: agent-arm64 agent-amd64 dashboard
 
 agent-arm64:
 	mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(BUILD_FLAGS) -o dist/xuanjian-agent-linux-arm64 ./agent/cmd/xuanjian-agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(BUILD_FLAGS) -o dist/baize-agent-linux-arm64 ./agent/cmd/baize-agent
 
 agent-amd64:
 	mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o dist/xuanjian-agent-linux-amd64 ./agent/cmd/xuanjian-agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o dist/baize-agent-linux-amd64 ./agent/cmd/baize-agent
 
 
 dashboard:
 	mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o dist/xuanjian-linux-amd64 ./dashboard/backend/cmd/xuanjian
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o dist/baize-linux-amd64 ./dashboard/backend/cmd/baize
 
 docker:
-	docker build --build-arg VERSION=$(VERSION) -t xuanjian:$(VERSION) -f dashboard/backend/Dockerfile .
+	docker build --build-arg VERSION=$(VERSION) -t baize:$(VERSION) -f dashboard/backend/Dockerfile .
 
 clean:
-	rm -f dist/xuanjian-agent-* dist/xuanjian-*
+	rm -f dist/baize-agent-* dist/baize-*

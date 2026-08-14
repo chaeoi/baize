@@ -69,14 +69,14 @@ func build2MProfile() robotProfile {
 	return robotProfile{
 		Motor: MotorConfig{
 			Enabled: true, Topic: "/motor/joint_states", MessageType: "sensor_msgs/msg/JointState",
-			ROSSetup:    []string{"/opt/ros/humble/setup.bash", "/opt/xuanjian/agent/ros/setup.bash"},
+			ROSSetup:    []string{"/opt/ros/humble/setup.bash", "/opt/baize/agent/ros/setup.bash"},
 			ReadTimeout: Duration(3 * time.Second), JointLabels: labels, Definitions: definitions,
 		},
 		BMS: BMSConfig{
 			Enabled: true, Protocol: "yy-bcu14h-mos-24s100a", CANInterface: "can5",
 			Timeout: Duration(5 * time.Second), QueryInterval: Duration(2 * time.Second),
 			ROSTopic:        "/bms_can/battery_data",
-			ROSSetup:        []string{"/opt/ros/humble/setup.bash", "/opt/xuanjian/agent/ros/setup.bash"},
+			ROSSetup:        []string{"/opt/ros/humble/setup.bash", "/opt/baize/agent/ros/setup.bash"},
 			PublishInterval: Duration(2 * time.Second), PublishTimeout: Duration(4 * time.Second),
 			Specification: BatterySpecification{PackModel: "YY-BCU14H-MOS-24S100A", SeriesCells: 24},
 		},

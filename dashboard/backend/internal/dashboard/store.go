@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"xuanjian/shared/model"
+	"baize/shared/model"
 )
 
 type Release struct {
@@ -126,6 +126,13 @@ func (s *Store) Robots() []RobotRecord {
 		return result[i].Code < result[j].Code
 	})
 	return result
+}
+
+func (s *Store) Robot(uuid string) (RobotRecord, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.robots[uuid]
+	return record, ok
 }
 
 func (s *Store) SetRemark(uuid, remark string) error {

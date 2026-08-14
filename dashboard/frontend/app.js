@@ -1,30 +1,42 @@
-const state = { robots: [], releases: [], selected: null, tab: 'overview', timer: null, authenticated: false, view: 'display', adminUser: 'admin' };
+const state = {
+  view: 'display',
+  robots: [],
+  releases: [],
+  selected: null,
+  authenticated: false,
+  adminUser: 'admin',
+  stream: null,
+  streamMode: '',
+  reconnectTimer: null,
+  reconnectAttempt: 0,
+  latestEventAt: 0,
+  toastTimer: null,
+};
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const dashboardPath = window.location.pathname === '/dashboard' || window.location.pathname === '/dashboard/';
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', boot);
+
+async function boot() {
   lucide.createIcons();
   bindEvents();
   updateClock();
-  setInterval(updateClock, 1000);
+  window.setInterval(updateClock, 1000);
+  if (dashboardPath) {
+    await bootDashboard();
+    return;
+  }
+  state.view = 'display';
   showApp();
-  try {
-    const session = await api('/api/v1/session');
-    if (session.username) {
-      state.adminUser = session.username;
-      $('#username').value = session.username;
-    }
-    state.authenticated = Boolean(session.authenticated);
-  } catch {}
-  syncAuthUI();
-  await refresh();
-});
+  openStream('public');
+}
 
 function bindEvents() {
   $('#login-form').addEventListener('submit', login);
   $('#logout-button').addEventListener('click', logout);
-  $('#refresh-button').addEventListener('click', refresh);
-  $$('.view-switch-button').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
+  $('#refresh-button').addEventListener('click', reconnectStream);
   $('#robot-search').addEventListener('input', renderRobotList);
   $('#remark-button').addEventListener('click', openRemark);
   $('#remark-form').addEventListener('submit', saveRemark);
@@ -32,18 +44,53 @@ function bindEvents() {
   $('#update-form').addEventListener('submit', assignUpdate);
   $('#clear-update-button').addEventListener('click', clearUpdate);
   $('#release-form').addEventListener('submit', uploadRelease);
-  $$('.dialog-close').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
-  $$('.tab').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tab)));
+  $$('.dialog-close').forEach((button) => button.addEventListener('click', () => button.closest('dialog').close()));
+}
+
+async function bootDashboard() {
+  showLoginGate();
+  try {
+    const session = await api('/api/v1/session');
+    state.authenticated = Boolean(session.authenticated);
+    state.adminUser = session.username || 'admin';
+    $('#username').value = state.adminUser;
+  } catch (error) {
+    $('#login-error').textContent = error.message;
+  }
+  if (state.authenticated) enterDashboard();
+  else focusPassword();
+}
+
+function showLoginGate() {
+  $('#login-gate').classList.remove('hidden');
+  $('#app-view').classList.add('hidden');
+}
+
+function showApp() {
+  $('#login-gate').classList.add('hidden');
+  $('#app-view').classList.remove('hidden');
+  $('#public-view').classList.toggle('hidden', state.view !== 'display');
+  $('#settings-view').classList.toggle('hidden', state.view !== 'settings');
+  $('#logout-button').classList.toggle('hidden', !state.authenticated);
+}
+
+function enterDashboard() {
+  state.view = 'settings';
+  history.replaceState({}, '', '/dashboard');
+  $('#settings-session').textContent = state.adminUser;
+  showApp();
+  openStream('admin');
+  loadReleases();
 }
 
 async function api(path, options = {}, requiresLogin = false) {
-  const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...options.headers } });
+  const headers = options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' };
+  const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { ...headers, ...options.headers } });
   if (response.status === 401 && requiresLogin) {
     state.authenticated = false;
-    state.releases = [];
-    syncAuthUI();
-    setView('display');
-    openLogin();
+    closeStream();
+    showLoginGate();
+    focusPassword();
     throw new Error('登录已失效');
   }
   if (!response.ok) {
@@ -61,9 +108,7 @@ async function login(event) {
     await api('/api/v1/session', { method: 'POST', body: JSON.stringify({ username: $('#username').value, password: $('#password').value }) });
     $('#password').value = '';
     state.authenticated = true;
-    $('#login-dialog').close();
-    syncAuthUI();
-    await setView('settings');
+    enterDashboard();
   } catch (error) {
     $('#login-error').textContent = error.message;
   }
@@ -72,168 +117,260 @@ async function login(event) {
 async function logout() {
   try { await api('/api/v1/session', { method: 'DELETE' }); } catch {}
   state.authenticated = false;
-  state.releases = [];
-  syncAuthUI();
-  await setView('display');
+  closeStream();
+  window.location.assign('/');
 }
 
-function openLogin() {
-  $('#login-error').textContent = '';
-  const dialog = $('#login-dialog');
-  if (!dialog.open) dialog.showModal();
-  setTimeout(() => $('#password').focus(), 0);
+function focusPassword() { window.setTimeout(() => $('#password').focus(), 0); }
+
+function openStream(mode) {
+  closeStream(false);
+  state.streamMode = mode;
+  setConnection('reconnecting', mode === 'admin' ? '后台通道连接中' : '实时通道连接中');
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const path = mode === 'admin' ? '/api/v1/admin/ws/robots' : '/api/v1/ws/robots';
+  const socket = new WebSocket(`${scheme}://${window.location.host}${path}`);
+  state.stream = socket;
+  socket.addEventListener('open', () => {
+    if (state.stream !== socket) return;
+    state.reconnectAttempt = 0;
+    setConnection('live', mode === 'admin' ? '后台实时' : '实时连接');
+  });
+  socket.addEventListener('message', (event) => {
+    if (state.stream !== socket) return;
+    try { receiveEvent(JSON.parse(event.data), mode); } catch { setConnection('error', '数据格式错误'); }
+  });
+  socket.addEventListener('error', () => {
+    if (state.stream === socket) setConnection('error', '实时通道异常');
+  });
+  socket.addEventListener('close', () => {
+    if (state.stream !== socket) return;
+    state.stream = null;
+    setConnection('reconnecting', '实时通道重连中');
+    scheduleReconnect();
+  });
 }
 
-function showApp() {
-  $('#app-view').classList.remove('hidden');
-  clearInterval(state.timer);
-  state.timer = setInterval(refresh, 3000);
-}
-
-async function refresh() {
-  try {
-    const robotData = await api('/api/v1/robots');
-    state.robots = robotData.robots || [];
-    if (state.authenticated && state.view === 'settings') {
-      const releaseData = await api('/api/v1/admin/releases', {}, true);
-      state.releases = releaseData.releases || [];
-    }
-    if (!state.selected || !state.robots.some(robot => robot.uuid === state.selected)) state.selected = state.robots[0]?.uuid || null;
-    render();
-  } catch (error) {
-    if (error.message !== '登录已失效') toast(error.message, true);
+function closeStream(schedule = true) {
+  if (state.reconnectTimer) {
+    clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = null;
   }
-}
-
-async function setView(view) {
-  if (view === 'settings' && !state.authenticated) {
-    openLogin();
-    return;
+  const socket = state.stream;
+  state.stream = null;
+  if (socket) {
+    socket.onclose = null;
+    socket.close();
   }
-  state.view = view;
-  $$('.view-switch-button').forEach(button => button.classList.toggle('active', button.dataset.view === view));
-  $('#display-view').classList.toggle('hidden', view !== 'display');
-  $('#settings-view').classList.toggle('hidden', view !== 'settings');
-  if (view === 'settings') await refresh(); else render();
+  if (schedule && state.streamMode) scheduleReconnect();
 }
 
-function syncAuthUI() {
-  $('#logout-button').classList.toggle('hidden', !state.authenticated);
-  $('#settings-session').textContent = state.adminUser;
+function reconnectStream() {
+  state.reconnectAttempt = 0;
+  openStream(state.view === 'settings' ? 'admin' : 'public');
+}
+
+function scheduleReconnect() {
+  if (state.reconnectTimer || !state.streamMode) return;
+  const delay = Math.min(1000 * (2 ** Math.min(state.reconnectAttempt, 4)), 15000);
+  state.reconnectAttempt += 1;
+  state.reconnectTimer = setTimeout(() => {
+    state.reconnectTimer = null;
+    openStream(state.streamMode);
+  }, delay);
+}
+
+function receiveEvent(event, mode) {
+  state.latestEventAt = Date.now();
+  if (event.type === 'snapshot') state.robots = event.robots || [];
+  if (event.type === 'robot' && event.robot) {
+    const key = mode === 'admin' ? event.robot.uuid : event.robot.id;
+    const index = state.robots.findIndex((robot) => (mode === 'admin' ? robot.uuid : robot.id) === key);
+    if (index === -1) state.robots.push(event.robot);
+    else state.robots[index] = event.robot;
+  }
+  if (event.server_time) {
+    const serverTime = Date.parse(event.server_time);
+    if (Number.isFinite(serverTime)) $('#fleet-latency').textContent = `${Math.max(0, Date.now() - serverTime)} ms`;
+  }
+  const eventDate = event.robot?.collected_at || event.server_time;
+  $('#last-event').textContent = eventDate ? `最新 ${relativeTime(eventDate)}` : '实时数据';
+  if (!state.selected || !state.robots.some((robot) => robotKey(robot, mode) === state.selected)) state.selected = state.robots[0] ? robotKey(state.robots[0], mode) : null;
+  render();
+}
+
+function setConnection(type, label) {
+  const stateEl = $('#connection-state');
+  stateEl.className = `connection-state ${type}`;
+  stateEl.lastElementChild.textContent = label;
 }
 
 function render() {
-  renderRobotList();
-  renderSettings();
-  const robot = selectedRobot();
-  $('#empty-state').classList.toggle('hidden', Boolean(robot));
-  $('#robot-detail').classList.toggle('hidden', !robot);
-  if (!robot) return;
-  const online = isOnline(robot);
-  $('#robot-code').textContent = robot.code;
-  $('#robot-status').textContent = online ? '在线' : '离线';
-  $('#robot-status').classList.toggle('online', online);
-  $('#detail-beacon').classList.toggle('online', online);
-  $('#robot-identity').textContent = `${robot.model || '未知型号'} · ${robot.hostname} · ${robot.os}/${robot.arch} · ${robot.uuid}`;
-  $('#robot-remark').textContent = robot.remark || '-';
-  $('#agent-version').textContent = robot.agent_version || '-';
-  $('#desired-version').textContent = robot.desired_version || '跟随配置';
-  $('#last-seen').textContent = relativeTime(robot.last_seen);
-  renderMetrics(robot.telemetry || {});
-  renderMotors(robot.telemetry?.motors);
-  renderDiagnostics(robot.telemetry?.errors || []);
+  if (state.view === 'settings') renderSettings();
+  else renderPublic();
+  lucide.createIcons();
 }
 
-function renderSettings() {
-  if (state.view !== 'settings') return;
-  const robot = selectedRobot();
-  $('#settings-robot-empty').classList.toggle('hidden', Boolean(robot));
-  $('#settings-robot-panel').classList.toggle('hidden', !robot);
-  renderReleases();
-  if (!robot) return;
-  const online = isOnline(robot);
-  $('#settings-robot-code').textContent = robot.code;
-  $('#settings-robot-identity').textContent = `${robot.hostname} · ${robot.uuid}`;
-  $('#settings-robot-status').textContent = online ? '在线' : '离线';
-  $('#settings-robot-status').classList.toggle('online', online);
-  $('#settings-robot-facts').innerHTML = facts([
-    ['配置', robot.model || '-'],
-    ['平台', `${robot.os}/${robot.arch}`],
-    ['Agent', robot.agent_version || '-'],
-    ['目标版本', robot.desired_version || '跟随配置'],
-    ['备注', robot.remark || '-'],
-    ['最后上报', relativeTime(robot.last_seen)]
-  ]);
-  const hasRelease = state.releases.some(release => release.os === robot.os && release.arch === robot.arch);
-  $('#update-button').disabled = !hasRelease;
+function renderPublic() {
+  const robots = state.robots;
+  const online = robots.filter(isPublicOnline).length;
+  const alerts = robots.reduce((total, robot) => total + (robot.summary?.diagnostic_count || 0), 0);
+  $('#fleet-total').textContent = robots.length;
+  $('#fleet-online').textContent = online;
+  $('#fleet-alerts').textContent = alerts;
+  $('#fleet-health').textContent = robots.length ? `${Math.round((online / robots.length) * 100)}% 正常运行` : '等待上报';
+  $('#directory-count').textContent = robots.length;
+  renderRobotList();
+  const robot = robots.find((item) => item.id === state.selected);
+  $('#empty-state').classList.toggle('hidden', Boolean(robot));
+  $('#robot-detail').classList.toggle('hidden', !robot);
+  if (robot) renderPublicDetail(robot);
 }
 
 function renderRobotList() {
   const query = ($('#robot-search')?.value || '').trim().toLowerCase();
-  const robots = state.robots.filter(robot => [robot.code, robot.hostname, robot.remark, robot.uuid].some(value => (value || '').toLowerCase().includes(query)));
-  $('#robot-count').textContent = `${state.robots.length} 台`;
-  $('#online-count').textContent = `${state.robots.filter(isOnline).length} 在线`;
-  $('#robot-list').innerHTML = robots.map(robot => `
-    <button class="robot-item ${robot.uuid === state.selected ? 'active' : ''}" data-uuid="${escapeHTML(robot.uuid)}" type="button">
-      <span class="dot ${isOnline(robot) ? 'online' : ''}"></span>
-      <span class="item-main"><strong>${escapeHTML(robot.code)}</strong><small>${escapeHTML(robot.remark || robot.hostname)}</small></span>
+  const robots = state.robots.filter((robot) => [robot.code, robot.model, robot.remark].some((value) => (value || '').toLowerCase().includes(query)));
+  $('#robot-list').innerHTML = robots.map((robot) => `
+    <button class="robot-item ${robot.id === state.selected ? 'active' : ''}" data-key="${escapeHTML(robot.id)}" type="button">
+      <span class="dot ${isPublicOnline(robot) ? 'online' : ''}"></span>
+      <span><strong>${escapeHTML(robot.code)}</strong><small>${escapeHTML(robot.remark || robot.model || '未命名设备')}</small></span>
       <time>${relativeTime(robot.last_seen)}</time>
-    </button>`).join('') || '<div class="empty-line">无匹配机器人</div>';
-  $$('.robot-item').forEach(button => button.addEventListener('click', () => { state.selected = button.dataset.uuid; render(); }));
+    </button>`).join('') || '<div class="empty-line">没有匹配设备</div>';
+  $$('#robot-list .robot-item').forEach((button) => button.addEventListener('click', () => { state.selected = button.dataset.key; render(); }));
 }
 
-function renderMetrics(telemetry) {
-  const system = telemetry.system || {};
-  const gpu = (telemetry.gpus || [])[0];
-  const bms = telemetry.bms;
-  setMetric('cpu', system.cpu_usage_percent, `${fixed(system.cpu_usage_percent)}%`, `负载 ${fixed(system.load_1)} · ${system.cpu_cores || 0} 核`);
-  const memoryPercent = percent(system.memory_used_bytes, system.memory_total_bytes);
-  setMetric('memory', memoryPercent, `${fixed(memoryPercent)}%`, `${bytes(system.memory_used_bytes)} / ${bytes(system.memory_total_bytes)}`);
-  setMetric('gpu', gpu?.utilization_percent, gpu ? `${fixed(gpu.utilization_percent)}%` : '-', gpu ? `${gpu.name} · ${fixed(gpu.temperature_celsius)} °C` : '无 GPU 数据');
-  setMetric('battery', bms?.soc_percent, bms?.online ? `${fixed(bms.soc_percent)}%` : '-', bms ? `${fixed(bms.voltage)} V · ${fixed(bms.current)} A` : 'BMS 未启用');
-
-  const disk = (system.disks || [])[0];
+function renderPublicDetail(robot) {
+  const summary = robot.summary || {};
+  const battery = summary.battery;
+  $('#robot-code').textContent = robot.code || '-';
+  $('#robot-model').textContent = robot.model || '未知型号';
+  $('#robot-remark').textContent = robot.remark || '未设置备注';
+  const online = isPublicOnline(robot);
+  $('#robot-status').textContent = online ? '在线运行' : '离线';
+  $('#robot-status').classList.toggle('online', online);
+  $('#detail-beacon').classList.toggle('online', online);
+  $('#detail-updated-text').textContent = `采集于 ${formatDate(robot.collected_at)} · ${relativeTime(robot.last_seen)}收到`;
+  setMetric('cpu', summary.cpu_percent, `${fixed(summary.cpu_percent)}%`, `负载 ${fixed(summary.load_1)}`);
+  setMetric('memory', summary.memory_percent, `${fixed(summary.memory_percent)}%`, '内存占用');
+  setMetric('disk', summary.disk_percent, `${fixed(summary.disk_percent)}%`, '根目录占用');
+  setMetric('battery', battery?.online ? battery.soc_percent : NaN, battery?.online ? `${fixed(battery.soc_percent)}%` : '--', battery ? `${fixed(battery.voltage)} V · ${fixed(battery.current)} A` : '未启用');
   $('#system-facts').innerHTML = facts([
-    ['CPU 型号', system.cpu_model || '-'], ['运行时间', duration(system.uptime_seconds)],
-    ['负载 1/5/15', `${fixed(system.load_1)} / ${fixed(system.load_5)} / ${fixed(system.load_15)}`],
-    ['Swap', `${bytes(system.swap_used_bytes)} / ${bytes(system.swap_total_bytes)}`],
-    ['磁盘 ' + (disk?.path || ''), disk ? `${bytes(disk.used_bytes)} / ${bytes(disk.total_bytes)}` : '-']
+    ['负载', fixed(summary.load_1)], ['运行时长', duration(summary.uptime_seconds)], ['采集时间', formatDate(robot.collected_at)], ['状态', online ? '在线运行' : '离线']
   ]);
-  const temperatures = system.temperatures || [];
-  $('#temperature-list').innerHTML = temperatures.map(item => `<div class="temperature-row ${item.celsius >= 80 ? 'hot' : ''}"><span title="${escapeHTML(item.name)}">${escapeHTML(item.name)}</span><strong>${fixed(item.celsius)} °C</strong></div>`).join('') || '<div class="empty-line">无温度数据</div>';
-  const batterySpec = bms?.specification || {};
-  $('#bms-facts').innerHTML = bms ? facts([
-    ['状态', bms.online ? '在线' : '离线'], ['BMS 型号 / 接口', `${bms.protocol} / ${bms.interface}`],
-		['电压', `${fixed(bms.voltage)} V`], ['电流', `${fixed(bms.current)} A`],
-		['温度', `${fixed(bms.temperature)} °C`], ['功率 / 累计能量', `${fixed(bms.power_watts)} W / ${fixed(bms.total_energy_wh)} Wh`],
-		['MOS / 板温 / 加热', `${fixed(bms.mos_celsius)} / ${fixed(bms.board_celsius)} / ${fixed(bms.heater_celsius)} °C`],
-		['串数 / 温探', `${bms.cell_count || batterySpec.series_cells || '-'} / ${bms.temperature_count || '-'}`],
-    ['剩余容量', bms.remaining_capacity_ah ? `${fixed(bms.remaining_capacity_ah, 2)} Ah` : '-'],
-    ['SOH / 循环', `${bms.soh_percent ? fixed(bms.soh_percent) + '%' : '-'} / ${bms.cycle_count || '-'}`],
-		['单体电压 Max/Min/Δ', bms.max_cell_voltage ? `${fixed(bms.max_cell_voltage, 3)} / ${fixed(bms.min_cell_voltage, 3)} / ${fixed(bms.cell_voltage_delta, 3)} V` : '-'],
-		['单体温度 Max/Min/Δ', bms.max_cell_temperature ? `${fixed(bms.max_cell_temperature)} / ${fixed(bms.min_cell_temperature)} / ${fixed(bms.cell_temperature_delta)} °C` : '-'],
-    ['BMS / 电池规格', [batterySpec.vendor, batterySpec.pack_model].filter(Boolean).join(' / ') || '-'],
-    ['充放电', bms.power_supply_status || '-'],
-    ['ROS2 发布', bms.published_to_ros2 ? '已启用' : '未发布'], ['故障', (bms.faults || []).join(', ') || '无']
-  ]) : facts([['状态', '未启用']]);
+  const maxTemp = summary.temperature_max;
+  const minTemp = summary.temperature_min;
+  $('#thermal-summary').innerHTML = maxTemp === undefined ? '<div class="empty-line">无温度数据</div>' : `<div class="thermal-reading ${maxTemp >= 80 ? 'hot' : ''}"><span>最高温度</span><strong>${fixed(maxTemp)} °C</strong></div><div class="thermal-reading"><span>最低温度</span><strong>${fixed(minTemp)} °C</strong></div><div class="thermal-note">设备上报的热传感器摘要</div>`;
+  $('#component-facts').innerHTML = facts([
+    ['GPU', summary.gpu ? `${fixed(summary.gpu.utilization_percent)}% · ${fixed(summary.gpu.temperature_celsius)} °C` : '无数据'],
+    ['电机', `${summary.motor_count || 0} 个 · ${summary.motor_topic_online ? '有数据' : '无数据'}`],
+    ['诊断', summary.diagnostic_count ? `${summary.diagnostic_count} 项异常` : '正常'],
+    ['电池状态', battery?.online ? (battery.power_supply_status || '在线') : '未启用']
+  ]);
 }
 
-function renderMotors(motors) {
-  const items = motors?.items || [];
-  $('#motor-count').textContent = items.length;
-  $('#motor-source').textContent = motors?.source || '-';
-  $('#motor-topic').textContent = motors?.topic || '-';
-  $('#motor-topic-state').textContent = motors?.topic_online ? '在线' : '无数据';
-  $('#motor-sampled').textContent = motors?.sampled_at ? relativeTime(motors.sampled_at) : '-';
-  $('#motor-limit').textContent = motors?.temperature_supported && motors?.per_motor_online_supported ? '' : '当前 JointState 不含逐电机在线状态和温度；表内扭矩由主控根据电流与电机参数估算。';
-  $('#motor-limit').classList.toggle('hidden', motors?.temperature_supported && motors?.per_motor_online_supported);
-  $('#motor-table').innerHTML = items.map(item => `<tr><td>${escapeHTML(item.id)}</td><td>${escapeHTML(item.label || '-')}</td><td>${escapeHTML([item.brand, item.model].filter(Boolean).join(' / ') || '-')}</td><td>${escapeHTML(item.can_interface || '-')}</td><td>${escapeHTML(item.control_mode || '-')}</td><td>${fixed(item.position_rad, 4)}</td><td>${fixed(item.velocity_rps, 4)}</td><td>${fixed(item.torque_nm, 3)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty-line">无电机数据</td></tr>';
+function renderSettings() {
+  $('#settings-count').textContent = state.robots.length;
+  $('#settings-robot-list').innerHTML = state.robots.map((robot) => `
+    <button class="settings-robot-item ${robot.uuid === state.selected ? 'active' : ''}" data-key="${escapeHTML(robot.uuid)}" type="button">
+      <span><strong>${escapeHTML(robot.code)}</strong><small>${escapeHTML(robot.hostname || robot.model || '-')}</small></span><span class="status-label ${isAdminOnline(robot) ? 'online' : ''}">${isAdminOnline(robot) ? '在线' : '离线'}</span>
+    </button>`).join('') || '<div class="empty-line">暂无机器人记录</div>';
+  $$('#settings-robot-list .settings-robot-item').forEach((button) => button.addEventListener('click', () => { state.selected = button.dataset.key; render(); }));
+  const robot = state.robots.find((item) => item.uuid === state.selected);
+  $('#settings-robot-empty').classList.toggle('hidden', Boolean(robot));
+  $('#settings-robot-panel').classList.toggle('hidden', !robot);
+  if (!robot) return;
+  const online = isAdminOnline(robot);
+  $('#settings-robot-code').textContent = robot.code;
+  $('#settings-robot-status').textContent = online ? '在线' : '离线';
+  $('#settings-robot-status').classList.toggle('online', online);
+  const telemetry = robot.telemetry || {};
+  const motor = telemetry.motors || {};
+  const bms = telemetry.bms || {};
+  $('#settings-identity-facts').innerHTML = facts([
+    ['UUID', robot.uuid], ['型号', robot.model], ['主机名', robot.hostname], ['平台', `${robot.os}/${robot.arch}`], ['Agent 版本', robot.agent_version], ['最后上报', formatDate(robot.last_seen)]
+  ]);
+  $('#settings-config-facts').innerHTML = facts([
+    ['系统采集', telemetry.system ? '已启用' : '未上报'], ['CPU 核心', telemetry.system?.cpu_cores || '-'], ['磁盘路径', (telemetry.system?.disks || []).map((disk) => disk.path).join(', ') || '-'],
+    ['电机 Topic', motor.topic || '-'], ['电机来源', motor.source || '-'], ['BMS 协议', bms.protocol || '-'], ['BMS 接口', bms.interface || '-'], ['目标版本', robot.desired_version || '跟随发布']
+  ]);
+  $('#update-button').disabled = !state.releases.some((release) => release.os === robot.os && release.arch === robot.arch);
+  $('#settings-session').textContent = state.adminUser;
+  renderReleases();
 }
 
-function renderDiagnostics(errors) {
-  $('#error-count').textContent = errors.length;
-  $('#diagnostic-list').innerHTML = errors.map(error => `<div class="diagnostic-row"><strong>${escapeHTML(error.component)}</strong><span>${escapeHTML(error.message)}</span><time>${relativeTime(error.at)}</time></div>`).join('') || '<div class="empty-line">当前无采集错误</div>';
+function openRemark() {
+  const robot = selectedAdminRobot(); if (!robot) return;
+  $('#remark-dialog-title').textContent = robot.code;
+  $('#remark-input').value = robot.remark || '';
+  $('#remark-dialog').showModal();
 }
+
+async function saveRemark(event) {
+  event.preventDefault();
+  const robot = selectedAdminRobot(); if (!robot) return;
+  try {
+    await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/remark`, { method: 'PATCH', body: JSON.stringify({ remark: $('#remark-input').value }) }, true);
+    $('#remark-dialog').close(); toast('备注已更新');
+  } catch (error) { toast(error.message, true); }
+}
+
+function openUpdate() {
+  const robot = selectedAdminRobot(); if (!robot) return;
+  const versions = state.releases.filter((release) => release.os === robot.os && release.arch === robot.arch);
+  $('#update-dialog-title').textContent = `${robot.code} · 指定版本`;
+  $('#update-version').innerHTML = versions.map((release) => `<option value="${escapeHTML(release.version)}">${escapeHTML(release.version)} · ${bytes(release.size)}</option>`).join('');
+  $('#update-dialog').showModal();
+}
+
+async function assignUpdate(event) {
+  event.preventDefault();
+  const robot = selectedAdminRobot(); if (!robot) return;
+  try {
+    await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/update`, { method: 'POST', body: JSON.stringify({ version: $('#update-version').value }) }, true);
+    $('#update-dialog').close(); toast('更新指令已下发');
+  } catch (error) { toast(error.message, true); }
+}
+
+async function clearUpdate() {
+  const robot = selectedAdminRobot(); if (!robot) return;
+  try {
+    await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/update`, { method: 'DELETE' }, true);
+    $('#update-dialog').close(); toast('已恢复跟随发布');
+  } catch (error) { toast(error.message, true); }
+}
+
+async function loadReleases() {
+  try {
+    const data = await api('/api/v1/admin/releases', {}, true);
+    state.releases = data.releases || [];
+    render();
+  } catch (error) { if (error.message !== '登录已失效') toast(error.message, true); }
+}
+
+async function uploadRelease(event) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    await api('/api/v1/admin/releases', { method: 'POST', body: form }, true);
+    event.currentTarget.reset(); await loadReleases(); toast('Agent 发布已上传');
+  } catch (error) { toast(error.message, true); }
+}
+
+function renderReleases() {
+  if (!$('#release-list')) return;
+  $('#release-list').innerHTML = state.releases.map((release) => `<div class="release-row"><strong>${escapeHTML(release.version)}</strong><span>${escapeHTML(release.os)}/${escapeHTML(release.arch)}</span><code>${escapeHTML(release.sha256.slice(0, 12))} · ${bytes(release.size)}</code><button class="icon-button" data-release="${escapeHTML(release.id)}" type="button" title="删除发布" aria-label="删除发布"><i data-lucide="trash-2"></i></button></div>`).join('') || '<div class="empty-line">暂无发布文件</div>';
+  $$('#release-list [data-release]').forEach((button) => button.addEventListener('click', () => deleteRelease(button.dataset.release)));
+  lucide.createIcons();
+}
+
+async function deleteRelease(id) {
+  try { await api(`/api/v1/admin/releases/${encodeURIComponent(id)}`, { method: 'DELETE' }, true); await loadReleases(); toast('发布文件已删除'); } catch (error) { toast(error.message, true); }
+}
+
+function selectedAdminRobot() { return state.robots.find((robot) => robot.uuid === state.selected); }
+function robotKey(robot, mode) { return mode === 'admin' ? robot.uuid : robot.id; }
+function isPublicOnline(robot) { return Boolean(robot.online) && Date.now() - Date.parse(robot.last_seen) <= 12000; }
+function isAdminOnline(robot) { return Date.now() - Date.parse(robot.last_seen) <= 12000; }
 
 function setMetric(name, value, display, sub) {
   const safe = Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : 0;
@@ -242,82 +379,15 @@ function setMetric(name, value, display, sub) {
   $(`#${name}-meter`).style.width = `${safe}%`;
 }
 
-function setTab(tab) {
-  state.tab = tab;
-  $$('.tab').forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
-  $$('.tab-view').forEach(view => view.classList.add('hidden'));
-  $(`#tab-${tab}`).classList.remove('hidden');
+function facts(items) { return items.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value === undefined || value === null || value === '' ? '-' : String(value))}</dd></div>`).join(''); }
+function updateClock() {
+  $('#server-clock').textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  if (state.view === 'display' && state.robots.length) renderPublic();
 }
-
-function openRemark() {
-  const robot = selectedRobot(); if (!robot) return;
-  $('#remark-dialog-title').textContent = robot.code;
-  $('#remark-input').value = robot.remark || '';
-  $('#remark-dialog').showModal();
-}
-
-async function saveRemark(event) {
-  event.preventDefault(); const robot = selectedRobot(); if (!robot) return;
-  try {
-    await api(`/api/v1/admin/robots/${robot.uuid}/remark`, { method: 'PATCH', body: JSON.stringify({ remark: $('#remark-input').value }) }, true);
-    $('#remark-dialog').close(); toast('备注已保存'); await refresh();
-  } catch (error) { toast(error.message, true); }
-}
-
-function openUpdate() {
-  const robot = selectedRobot(); if (!robot) return;
-  const matching = state.releases.filter(release => release.os === robot.os && release.arch === robot.arch);
-  $('#update-dialog-title').textContent = robot.code;
-  $('#update-version').innerHTML = matching.map(release => `<option value="${escapeHTML(release.version)}">${escapeHTML(release.version)} · ${bytes(release.size)}</option>`).join('');
-  $('#update-button').disabled = matching.length === 0;
-  if (!matching.length) { toast('没有匹配此机器人平台的版本', true); return; }
-  $('#update-version').value = robot.desired_version || matching[0].version;
-  $('#update-dialog').showModal();
-}
-
-async function assignUpdate(event) {
-  event.preventDefault(); const robot = selectedRobot(); if (!robot) return;
-  try {
-    await api(`/api/v1/admin/robots/${robot.uuid}/update`, { method: 'POST', body: JSON.stringify({ version: $('#update-version').value }) }, true);
-    $('#update-dialog').close(); toast('更新任务已下发'); await refresh();
-  } catch (error) { toast(error.message, true); }
-}
-
-async function clearUpdate() {
-  const robot = selectedRobot(); if (!robot) return;
-  try {
-    await api(`/api/v1/admin/robots/${robot.uuid}/update`, { method: 'DELETE' }, true);
-    $('#update-dialog').close(); toast('已清除指定版本'); await refresh();
-  } catch (error) { toast(error.message, true); }
-}
-
-function renderReleases() {
-  $('#release-list').innerHTML = state.releases.map(release => `<div class="release-row"><strong>${escapeHTML(release.version)}</strong><span>${release.os}/${release.arch}</span><code>${release.sha256.slice(0, 12)}</code><span>${bytes(release.size)}</span><button class="icon-button delete-release" data-id="${escapeHTML(release.id)}" title="删除" type="button"><i data-lucide="trash-2"></i></button></div>`).join('') || '<div class="empty-line">暂无版本</div>';
-  lucide.createIcons();
-  $$('.delete-release').forEach(button => button.addEventListener('click', () => deleteRelease(button.dataset.id)));
-}
-
-async function uploadRelease(event) {
-  event.preventDefault();
-  try {
-    await api('/api/v1/admin/releases', { method: 'POST', body: new FormData(event.currentTarget) }, true);
-    event.currentTarget.reset(); toast('版本上传完成'); await refresh(); renderReleases();
-  } catch (error) { toast(error.message, true); }
-}
-
-async function deleteRelease(id) {
-  try { await api(`/api/v1/admin/releases/${encodeURIComponent(id)}`, { method: 'DELETE' }, true); toast('版本已删除'); await refresh(); renderReleases(); }
-  catch (error) { toast(error.message, true); }
-}
-
-function selectedRobot() { return state.robots.find(robot => robot.uuid === state.selected); }
-function isOnline(robot) { return Date.now() - new Date(robot.last_seen).getTime() < 10000; }
-function percent(used, total) { return total > 0 ? used / total * 100 : 0; }
+function formatDate(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN', { hour12: false }); }
+function relativeTime(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (!Number.isFinite(seconds)) return '-'; if (seconds < 2) return '刚刚'; if (seconds < 60) return `${seconds} 秒前`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes} 分钟前`; return `${Math.floor(minutes / 60)} 小时前`; }
+function duration(value) { if (!Number.isFinite(Number(value))) return '-'; const seconds = Math.max(0, Math.floor(Number(value))); const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.floor((seconds % 3600) / 60); return days ? `${days} 天 ${hours} 小时` : `${hours} 小时 ${minutes} 分`; }
 function fixed(value, digits = 1) { return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '-'; }
-function bytes(value) { if (!value) return '0 B'; const units = ['B','KiB','MiB','GiB','TiB']; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / 1024 ** index).toFixed(index > 2 ? 1 : 0)} ${units[index]}`; }
-function duration(seconds) { if (!seconds) return '-'; const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600), minutes = Math.floor(seconds % 3600 / 60); return `${days ? days + ' 天 ' : ''}${hours} 小时 ${minutes} 分`; }
-function relativeTime(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (seconds < 5) return '刚刚'; if (seconds < 60) return `${seconds} 秒前`; if (seconds < 3600) return `${Math.floor(seconds/60)} 分前`; if (seconds < 86400) return `${Math.floor(seconds/3600)} 小时前`; return `${Math.floor(seconds/86400)} 天前`; }
-function facts(rows) { return rows.map(([key, value]) => `<div><dt>${escapeHTML(key)}</dt><dd>${escapeHTML(String(value))}</dd></div>`).join(''); }
-function escapeHTML(value) { return String(value ?? '').replace(/[&<>'"]/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[character])); }
-function updateClock() { $('#clock').textContent = new Intl.DateTimeFormat('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(new Date()); }
-let toastTimer; function toast(message, error = false) { const element = $('#toast'); element.textContent = message; element.classList.toggle('error', error); element.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => element.classList.remove('show'), 2800); }
+function bytes(value) { const number = Number(value); if (!Number.isFinite(number) || number <= 0) return '-'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; let size = number; let index = 0; while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; } return `${size.toFixed(index ? 1 : 0)} ${units[index]}`; }
+function escapeHTML(value) { return String(value ?? '').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character])); }
+function toast(message, error = false) { const element = $('#toast'); element.textContent = message; element.className = `toast show${error ? ' error' : ''}`; clearTimeout(state.toastTimer); state.toastTimer = setTimeout(() => { element.className = 'toast'; }, 2600); }

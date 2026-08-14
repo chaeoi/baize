@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	dashboardconfig "xuanjian/dashboard/backend/internal/config"
-	"xuanjian/dashboard/backend/internal/dashboard"
+	dashboardconfig "baize/dashboard/backend/internal/config"
+	"baize/dashboard/backend/internal/dashboard"
 )
 
 var version = "dev"

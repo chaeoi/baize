@@ -1,5 +1,5 @@
 [Unit]
-Description=Xuanjian robot monitoring agent
+Description=Baize robot monitoring agent
 After=network-online.target
 Wants=network-online.target
 
@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/opt/xuanjian/agent
-ExecStart=/opt/xuanjian/agent/xuanjian-agent -config /opt/xuanjian/agent/config.yml
+WorkingDirectory=/opt/baize/agent
+ExecStart=/opt/baize/agent/baize-agent -config /opt/baize/agent/config.yml
 Restart=always
 RestartSec=3
 
@@ -19,7 +19,7 @@ NoNewPrivileges=true
 
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/xuanjian/agent
+ReadWritePaths=/opt/baize/agent
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
