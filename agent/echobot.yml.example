@@ -1,0 +1,35 @@
+agent:
+  # UUID is the permanent robot identity. Do not reuse it on another robot.
+  uuid: "7fd34256-bf3a-4cf6-8da0-fbce40f34d11"
+  robot_code: "M99"
+  # Built-in hardware profile: battery protocol, motor inventory and joint names.
+  robot_model: 2m_v0.1.2
+  dashboard_url: "http://dashboard.example.lan:8080"
+  token: "replace-with-the-same-agent-token-as-dashboard"
+  report_interval: 2s
+  http_timeout: 10s
+
+system:
+  enabled: true
+  disk_paths:
+    - /
+
+gpu:
+  enabled: true
+  command: /usr/bin/nvidia-smi
+  timeout: 3s
+
+motor:
+  # Read-only: the agent only executes `ros2 topic echo --once`.
+  enabled: true
+  read_timeout: 3s
+
+bms:
+  enabled: true
+  # Protocol and interface come from robot_model. The agent never reconfigures the CAN link.
+  publish_ros2: false
+
+update:
+  enabled: true
+  automatic: true
+  check_interval: 1m

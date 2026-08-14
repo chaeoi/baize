@@ -1,0 +1,29 @@
+[Unit]
+Description=EchoBot robot monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/echobot/agent
+ExecStart=/opt/echobot/agent/echobot-agent -config /opt/echobot/agent/echobot.yml
+Restart=always
+RestartSec=3
+
+# Required only for BMS SocketCAN. The motor collector remains ROS2 read-only.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/echobot/agent
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
