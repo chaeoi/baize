@@ -1,5 +1,5 @@
 [Unit]
-Description=EchoBot robot monitoring agent
+Description=Xuanjian robot monitoring agent
 After=network-online.target
 Wants=network-online.target
 

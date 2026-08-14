@@ -149,7 +149,7 @@ EOF
 
 cat > "$tmp_dir/echobot-agent.service" <<'EOF'
 [Unit]
-Description=EchoBot robot monitoring agent
+Description=Xuanjian robot monitoring agent
 After=network-online.target
 Wants=network-online.target
 
