@@ -1,4 +1,4 @@
-module echobot
+module xuanjian
 
 go 1.22
 

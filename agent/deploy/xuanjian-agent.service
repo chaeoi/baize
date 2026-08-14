@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/opt/echobot/agent
-ExecStart=/opt/echobot/agent/echobot-agent -config /opt/echobot/agent/config.yml
+WorkingDirectory=/opt/xuanjian/agent
+ExecStart=/opt/xuanjian/agent/xuanjian-agent -config /opt/xuanjian/agent/config.yml
 Restart=always
 RestartSec=3
 
@@ -19,7 +19,7 @@ NoNewPrivileges=true
 
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/echobot/agent
+ReadWritePaths=/opt/xuanjian/agent
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true

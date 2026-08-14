@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-repo=${ECHOBOT_REPO:-chaeoi/echobot}
-version=${ECHOBOT_VERSION:-latest}
-install_dir=/opt/echobot/agent
+repo=${XUANJIAN_REPO:-chaeoi/xuanjian}
+version=${XUANJIAN_VERSION:-latest}
+install_dir=/opt/xuanjian/agent
 dashboard_url=
 token=
 robot_code=
@@ -17,7 +17,7 @@ EOF
 }
 
 die() {
-	echo "echobot-agent installer: $*" >&2
+	echo "xuanjian-agent installer: $*" >&2
 	exit 1
 }
 
@@ -105,7 +105,7 @@ if ! printf '%s\n' "$robot_uuid" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5
 	die "--uuid must be a canonical UUID"
 fi
 
-id ubuntu >/dev/null 2>&1 || die "the ubuntu user is required by echobot-agent.service"
+id ubuntu >/dev/null 2>&1 || die "the ubuntu user is required by xuanjian-agent.service"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v install >/dev/null 2>&1 || die "install is required"
 command -v systemctl >/dev/null 2>&1 || die "systemctl is required"
@@ -119,7 +119,7 @@ esac
 
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
-asset="echobot-agent-linux-$arch"
+asset="xuanjian-agent-linux-$arch"
 if [ "$version" = latest ]; then
 	url="https://github.com/$repo/releases/latest/download/$asset"
 else
@@ -147,7 +147,7 @@ agent:
   token: $token_yaml
 EOF
 
-cat > "$tmp_dir/echobot-agent.service" <<'EOF'
+cat > "$tmp_dir/xuanjian-agent.service" <<'EOF'
 [Unit]
 Description=Xuanjian robot monitoring agent
 After=network-online.target
@@ -157,8 +157,8 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/opt/echobot/agent
-ExecStart=/opt/echobot/agent/echobot-agent -config /opt/echobot/agent/config.yml
+WorkingDirectory=/opt/xuanjian/agent
+ExecStart=/opt/xuanjian/agent/xuanjian-agent -config /opt/xuanjian/agent/config.yml
 Restart=always
 RestartSec=3
 
@@ -168,7 +168,7 @@ NoNewPrivileges=true
 
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/echobot/agent
+ReadWritePaths=/opt/xuanjian/agent
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
@@ -180,9 +180,9 @@ EOF
 
 "$tmp_dir/$asset" -config "$tmp_dir/config.yml" -check-config
 install -d -o ubuntu -g ubuntu -m 0750 "$install_dir"
-install -o ubuntu -g ubuntu -m 0755 "$tmp_dir/$asset" "$install_dir/echobot-agent"
+install -o ubuntu -g ubuntu -m 0755 "$tmp_dir/$asset" "$install_dir/xuanjian-agent"
 install -o ubuntu -g ubuntu -m 0600 "$tmp_dir/config.yml" "$install_dir/config.yml"
-install -o root -g root -m 0644 "$tmp_dir/echobot-agent.service" /etc/systemd/system/echobot-agent.service
+install -o root -g root -m 0644 "$tmp_dir/xuanjian-agent.service" /etc/systemd/system/xuanjian-agent.service
 systemctl daemon-reload
-systemctl enable --now echobot-agent
-echo "echobot-agent installed for $robot_code ($robot_uuid)"
+systemctl enable --now xuanjian-agent
+echo "xuanjian-agent installed for $robot_code ($robot_uuid)"

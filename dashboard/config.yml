@@ -6,4 +6,4 @@ dashboard:
   jwt_secret: ""
   listen: ":8080"
   data_dir: "/data"
-  frontend_dir: "/opt/echobot/dashboard/frontend"
+  frontend_dir: "/opt/xuanjian/dashboard/frontend"

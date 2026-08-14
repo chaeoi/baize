@@ -63,18 +63,18 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build \
             -trimpath -buildvcs=false -tags netgo,osusergo \
             -ldflags="-s -w -buildid= -X main.version=$VERSION" \
-            -o "dist/echobot-agent-linux-$GOARCH" ./agent/cmd/echobot-agent
+            -o "dist/xuanjian-agent-linux-$GOARCH" ./agent/cmd/xuanjian-agent
           if [ "$GOARCH" = "$(go env GOHOSTARCH)" ]; then
-            "dist/echobot-agent-linux-$GOARCH" -version
+            "dist/xuanjian-agent-linux-$GOARCH" -version
           else
-            file "dist/echobot-agent-linux-$GOARCH"
+            file "dist/xuanjian-agent-linux-$GOARCH"
           fi
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
-          name: echobot-agent-${{ matrix.arch }}
-          path: dist/echobot-agent-linux-${{ matrix.arch }}
+          name: xuanjian-agent-${{ matrix.arch }}
+          path: dist/xuanjian-agent-linux-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 7
 
@@ -91,7 +91,7 @@ jobs:
       - name: 下载 Agent 构建产物
         uses: actions/download-artifact@v7
         with:
-          pattern: echobot-agent-*
+          pattern: xuanjian-agent-*
           merge-multiple: true
           path: dist
 
@@ -103,7 +103,7 @@ jobs:
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
           version="$(date -u -d "$commit_date" +%Y%m%d)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          sha256sum dist/echobot-agent-linux-* > dist/SHA256SUMS
+          sha256sum dist/xuanjian-agent-linux-* > dist/SHA256SUMS
 
       - name: 移动日期标签
         env:
@@ -130,8 +130,8 @@ jobs:
             gh release delete "$VERSION" --yes
           fi
           gh release create "$VERSION" \
-            dist/echobot-agent-linux-amd64 \
-            dist/echobot-agent-linux-arm64 \
+            dist/xuanjian-agent-linux-amd64 \
+            dist/xuanjian-agent-linux-arm64 \
             dist/SHA256SUMS \
             --target "$GITHUB_SHA" \
             --title "Xuanjian Agent $VERSION" \

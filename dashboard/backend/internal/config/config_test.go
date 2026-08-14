@@ -14,8 +14,8 @@ func TestLoad(t *testing.T) {
   admin_password: admin-password-long-enough
   jwt_secret: jwt-secret-long-enough-for-tests
   listen: :9090
-  data_dir: /var/lib/echobot
-  frontend_dir: /opt/echobot/dashboard/frontend
+  data_dir: /var/lib/xuanjian
+  frontend_dir: /opt/xuanjian/dashboard/frontend
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -24,7 +24,7 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Dashboard.Listen != ":9090" || cfg.Dashboard.DataDir != "/var/lib/echobot" {
+	if cfg.Dashboard.Listen != ":9090" || cfg.Dashboard.DataDir != "/var/lib/xuanjian" {
 		t.Fatalf("unexpected config: %+v", cfg.Dashboard)
 	}
 }

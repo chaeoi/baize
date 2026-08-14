@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os/exec"
 
-	"echobot/agent/internal/config"
-	"echobot/shared/model"
+	"xuanjian/agent/internal/config"
+	"xuanjian/shared/model"
 )
 
 func PublishBMSROS2(ctx context.Context, cfg config.BMSConfig, metrics model.BMSMetrics) error {

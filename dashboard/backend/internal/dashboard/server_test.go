@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"echobot/shared/model"
+	"xuanjian/shared/model"
 )
 
 func TestSessionTokenUsesJWTSecret(t *testing.T) {
