@@ -2,6 +2,6 @@
 /tmp/
 /output/
 /.playwright-cli/
-/xuanjian.yml
+/baize.yml
 /.env
 *.log

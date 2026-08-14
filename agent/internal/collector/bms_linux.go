@@ -13,8 +13,8 @@ import (
 	"time"
 	"unsafe"
 
-	"xuanjian/agent/internal/config"
-	"xuanjian/shared/model"
+	"baize/agent/internal/config"
+	"baize/shared/model"
 )
 
 const (

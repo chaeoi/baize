@@ -32,7 +32,7 @@ func Default() Config {
 		AdminUser:   "admin",
 		Listen:      ":8080",
 		DataDir:     "/data",
-		FrontendDir: "/opt/xuanjian/dashboard/frontend",
+		FrontendDir: "/opt/baize/dashboard/frontend",
 	}}
 }
 

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-	"xuanjian/agent/internal/config"
-	"xuanjian/shared/model"
+	"baize/agent/internal/config"
+	"baize/shared/model"
 )
 
 type jointStateMessage struct {

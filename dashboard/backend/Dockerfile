@@ -11,17 +11,17 @@ ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} ALL_PROXY=${ALL_PROXY} N
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
-COPY dashboard/backend/cmd/xuanjian ./dashboard/backend/cmd/xuanjian
+COPY dashboard/backend/cmd/baize ./dashboard/backend/cmd/baize
 COPY dashboard/backend/internal/config ./dashboard/backend/internal/config
 COPY dashboard/backend/internal/dashboard ./dashboard/backend/internal/dashboard
 COPY shared/model ./shared/model
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/xuanjian ./dashboard/backend/cmd/xuanjian
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/baize ./dashboard/backend/cmd/baize
 
 FROM ${RUNTIME_IMAGE}
 RUN mkdir -p /data /config
-COPY --from=backend-builder /out/xuanjian /opt/xuanjian/dashboard/bin/xuanjian
-COPY dashboard/frontend /opt/xuanjian/dashboard/frontend
+COPY --from=backend-builder /out/baize /opt/baize/dashboard/bin/baize
+COPY dashboard/frontend /opt/baize/dashboard/frontend
 COPY dashboard/config.yml /config/config.example.yml
 EXPOSE 8080
 VOLUME ["/data"]
-ENTRYPOINT ["/opt/xuanjian/dashboard/bin/xuanjian"]
+ENTRYPOINT ["/opt/baize/dashboard/bin/baize"]

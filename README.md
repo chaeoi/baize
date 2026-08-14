@@ -1,12 +1,12 @@
-# 玄鉴 Xuanjian
+# 白泽 Baize
 
-玄鉴由机器人端 Agent 和管理 Dashboard 组成。Agent 负责采集状态并向 Dashboard 上报；Dashboard 负责查看机器人、保存备注和分发 Agent 更新。
+白泽由机器人端 Agent 和管理 Dashboard 组成。Agent 负责采集状态并向 Dashboard 上报；Dashboard 负责查看机器人、保存备注和分发 Agent 更新。
 
 ## 目录
 
-- `/opt/xuanjian/agent`：Agent 二进制、配置和 systemd 服务。
-- `/opt/xuanjian/dashboard/config.yml`：Dashboard 配置文件。
-- `/opt/xuanjian/dashboard/data`：Dashboard 在宿主机上的持久化数据目录。
+- `/opt/baize/agent`：Agent 二进制、配置和 systemd 服务。
+- `/opt/baize/dashboard/config.yml`：Dashboard 配置文件。
+- `/opt/baize/dashboard/data`：Dashboard 在宿主机上的持久化数据目录。
 - `shared/model/`：Agent 与 Dashboard 之间的遥测数据契约。
 
 ## 启动 Dashboard
@@ -14,20 +14,20 @@
 推荐使用 host 网络，监听地址和端口由 `dashboard/config.yml` 的 `dashboard.listen` 控制。首次运行不需要准备配置文件，容器会在宿主机目录中自动生成配置、创建默认用户 `admin`，并随机生成管理员密码、Agent token 和 JWT secret：
 
 ```bash
-sudo install -d -m 0750 /opt/xuanjian/dashboard
-sudo install -d -m 0750 /opt/xuanjian/dashboard/data
-docker pull chaeoi/xuanjian:latest
-docker run -d --name xuanjian \
+sudo install -d -m 0750 /opt/baize/dashboard
+sudo install -d -m 0750 /opt/baize/dashboard/data
+docker pull chaeoi/baize:latest
+docker run -d --name baize \
   --restart unless-stopped \
   --network host \
-  -v /opt/xuanjian/dashboard:/config \
-  -v /opt/xuanjian/dashboard/data:/data \
-  chaeoi/xuanjian:latest
+  -v /opt/baize/dashboard:/config \
+  -v /opt/baize/dashboard/data:/data \
+  chaeoi/baize:latest
 ```
 
-使用 `docker logs xuanjian` 查看首次生成的管理员密码和 Agent token；Agent 配置中的 `agent.token` 使用日志中同一个 token。已有 `config.yml` 时会沿用已有值，缺少的密钥会自动补齐并写回。
+使用 `docker logs baize` 查看首次生成的管理员密码和 Agent token；Agent 配置中的 `agent.token` 使用日志中同一个 token。已有 `config.yml` 时会沿用已有值，缺少的密钥会自动补齐并写回。
 
-访问 `http://<dashboard-host>:8080`。需要修改监听端口时，编辑宿主机 `/opt/xuanjian/dashboard/config.yml` 的 `dashboard.listen` 后重启容器。
+访问 `http://<dashboard-host>:8080`。需要修改监听端口时，编辑宿主机 `/opt/baize/dashboard/config.yml` 的 `dashboard.listen` 后重启容器。
 
 Dashboard 配置项：
 
@@ -37,31 +37,31 @@ Dashboard 配置项：
 - `dashboard.jwt_secret`：签发 Dashboard 登录 JWT 的密钥，缺少时自动生成。
 - `dashboard.listen`：监听地址，默认 `:8080`。
 - `dashboard.data_dir`：容器内持久化目录，默认 `/data`。
-- `dashboard.frontend_dir`：静态页面目录，默认 `/opt/xuanjian/dashboard/frontend`。
+- `dashboard.frontend_dir`：静态页面目录，默认 `/opt/baize/dashboard/frontend`。
 
-`dashboard/config.yml` 是配置模板；需要预设用户名和密码时，将它复制到 `/opt/xuanjian/dashboard/config.yml` 后编辑即可。
+`dashboard/config.yml` 是配置模板；需要预设用户名和密码时，将它复制到 `/opt/baize/dashboard/config.yml` 后编辑即可。
 
 ## 部署 Agent
 
 在机器人上可以用下面一条命令部署最新版本 Agent。它会按 CPU 架构下载静态二进制、生成 `config.yml`、安装 systemd 服务并立即启动：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chaeoi/xuanjian/main/agent/deploy/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/install.sh | \
   sudo bash -s -- \
   --dashboard-url http://<dashboard-host>:8080 \
   --token 'replace-with-the-same-token-as-dashboard-config' \
   --robot-code M99
 ```
 
-未传 `--uuid` 时脚本会生成一个新的 UUID；同一台机器人重新部署前请保留原有 `/opt/xuanjian/agent/config.yml`。也可以显式传入 `--uuid` 和 `--robot-model`。
+未传 `--uuid` 时脚本会生成一个新的 UUID；同一台机器人重新部署前请保留原有 `/opt/baize/agent/config.yml`。也可以显式传入 `--uuid` 和 `--robot-model`。
 
-手动部署时，在机器人上准备 `linux/arm64` 或 `linux/amd64` 的 Agent 文件，并放入 `/opt/xuanjian/agent`：
+手动部署时，在机器人上准备 `linux/arm64` 或 `linux/amd64` 的 Agent 文件，并放入 `/opt/baize/agent`：
 
 ```bash
-sudo install -d -o ubuntu -g ubuntu -m 0750 /opt/xuanjian/agent
-sudo install -o ubuntu -g ubuntu -m 0755 xuanjian-agent-linux-arm64 /opt/xuanjian/agent/xuanjian-agent
-sudo install -o ubuntu -g ubuntu -m 0600 agent/config.yml.example /opt/xuanjian/agent/config.yml
-sudoedit /opt/xuanjian/agent/config.yml
+sudo install -d -o ubuntu -g ubuntu -m 0750 /opt/baize/agent
+sudo install -o ubuntu -g ubuntu -m 0755 baize-agent-linux-arm64 /opt/baize/agent/baize-agent
+sudo install -o ubuntu -g ubuntu -m 0600 agent/config.yml.example /opt/baize/agent/config.yml
+sudoedit /opt/baize/agent/config.yml
 ```
 
 配置中必须填写每台机器人独有的 UUID、机器人编码、Dashboard 地址和与容器一致的 Agent token。内置硬件档案为 `2m_v0.1.2`；通常只需要调整身份字段和 `bms.publish_ros2` 等开关。
@@ -69,11 +69,11 @@ sudoedit /opt/xuanjian/agent/config.yml
 检查配置并启动服务：
 
 ```bash
-sudo -u ubuntu /opt/xuanjian/agent/xuanjian-agent \
-  -config /opt/xuanjian/agent/config.yml -check-config
-sudo install -m 0644 agent/deploy/xuanjian-agent.service /etc/systemd/system/xuanjian-agent.service
+sudo -u ubuntu /opt/baize/agent/baize-agent \
+  -config /opt/baize/agent/config.yml -check-config
+sudo install -m 0644 agent/deploy/baize-agent.service /etc/systemd/system/baize-agent.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now xuanjian-agent
+sudo systemctl enable --now baize-agent
 ```
 
 ## 电池支持

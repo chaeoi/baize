@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"xuanjian/shared/model"
+	"baize/shared/model"
 )
 
 const (
@@ -48,24 +48,31 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	config   ServerConfig
-	store    *Store
-	sessions map[string]time.Time
-	mu       sync.Mutex
-	handler  http.Handler
+	config       ServerConfig
+	store        *Store
+	sessions     map[string]time.Time
+	publicStream *streamHub
+	adminStream  *streamHub
+	mu           sync.Mutex
+	handler      http.Handler
 }
 
 func NewServer(cfg ServerConfig, store *Store) *Server {
-	server := &Server{config: cfg, store: store, sessions: make(map[string]time.Time)}
+	server := &Server{
+		config: cfg, store: store, sessions: make(map[string]time.Time),
+		publicStream: newStreamHub(), adminStream: newStreamHub(),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.health)
 	mux.HandleFunc("/api/v1/session", server.session)
 	mux.HandleFunc("/api/v1/robots", server.robots)
+	mux.HandleFunc("/api/v1/ws/robots", server.publicRobotStream)
 	mux.HandleFunc("/api/v1/telemetry", server.requireAgent(server.telemetry))
 	mux.HandleFunc("/api/v1/update/check", server.requireAgent(server.updateCheck))
 	mux.HandleFunc("/api/v1/update/files/", server.requireAgent(server.updateFile))
-	mux.HandleFunc("/api/v1/admin/robots", server.requireAdmin(server.robots))
+	mux.HandleFunc("/api/v1/admin/robots", server.requireAdmin(server.adminRobots))
 	mux.HandleFunc("/api/v1/admin/robots/", server.requireAdmin(server.robotAction))
+	mux.HandleFunc("/api/v1/admin/ws/robots", server.requireAdmin(server.adminRobotStream))
 	mux.HandleFunc("/api/v1/admin/releases", server.requireAdmin(server.releases))
 	mux.HandleFunc("/api/v1/admin/releases/", server.requireAdmin(server.releaseAction))
 	mux.HandleFunc("/api/", func(writer http.ResponseWriter, _ *http.Request) {
@@ -131,17 +138,17 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 		s.mu.Lock()
 		s.sessions[sessionID] = expires
 		s.mu.Unlock()
-		http.SetCookie(writer, &http.Cookie{Name: "xuanjian_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: expires})
+		http.SetCookie(writer, &http.Cookie{Name: "baize_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: expires})
 		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true})
 	case http.MethodDelete:
-		if cookie, err := request.Cookie("xuanjian_session"); err == nil {
+		if cookie, err := request.Cookie("baize_session"); err == nil {
 			if claims, ok := s.parseSessionToken(cookie.Value); ok {
 				s.mu.Lock()
 				delete(s.sessions, claims.ID)
 				s.mu.Unlock()
 			}
 		}
-		http.SetCookie(writer, &http.Cookie{Name: "xuanjian_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		http.SetCookie(writer, &http.Cookie{Name: "baize_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		writer.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(writer)
@@ -162,6 +169,10 @@ func (s *Server) telemetry(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	s.store.PutTelemetry(telemetry)
+	if robot, ok := s.store.Robot(telemetry.Robot.UUID); ok {
+		s.publicStream.broadcast(s.publicRobotEvent(robot))
+		s.adminStream.broadcast(s.adminRobotEvent(robot))
+	}
 	writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -207,7 +218,7 @@ func (s *Server) updateFile(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writer.Header().Set("Content-Type", "application/octet-stream")
-	writer.Header().Set("Content-Disposition", `attachment; filename="xuanjian-agent"`)
+	writer.Header().Set("Content-Disposition", `attachment; filename="baize-agent"`)
 	writer.Header().Set("X-Content-SHA256", release.SHA256)
 	http.ServeFile(writer, request, release.Filename)
 }
@@ -217,7 +228,23 @@ func (s *Server) robots(writer http.ResponseWriter, request *http.Request) {
 		methodNotAllowed(writer)
 		return
 	}
+	writeJSON(writer, http.StatusOK, map[string]any{"robots": s.publicRobotSnapshot(), "server_time": time.Now().UTC()})
+}
+
+func (s *Server) adminRobots(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer)
+		return
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{"robots": s.store.Robots(), "server_time": time.Now().UTC()})
+}
+
+func (s *Server) publicRobotStream(writer http.ResponseWriter, request *http.Request) {
+	s.serveRobotStream(writer, request, false)
+}
+
+func (s *Server) adminRobotStream(writer http.ResponseWriter, request *http.Request) {
+	s.serveRobotStream(writer, request, true)
 }
 
 func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) {
@@ -249,6 +276,7 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 			writeError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
+		s.broadcastRobot(uuid)
 		writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
 	case "update":
 		if request.Method == http.MethodDelete {
@@ -256,6 +284,7 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 				writeError(writer, http.StatusInternalServerError, err.Error())
 				return
 			}
+			s.broadcastRobot(uuid)
 			writer.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -277,9 +306,17 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 			writeError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
+		s.broadcastRobot(uuid)
 		writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
 	default:
 		writeError(writer, http.StatusNotFound, "route not found")
+	}
+}
+
+func (s *Server) broadcastRobot(uuid string) {
+	if robot, ok := s.store.Robot(uuid); ok {
+		s.publicStream.broadcast(s.publicRobotEvent(robot))
+		s.adminStream.broadcast(s.adminRobotEvent(robot))
 	}
 }
 
@@ -403,7 +440,7 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) validSession(request *http.Request) bool {
-	cookie, err := request.Cookie("xuanjian_session")
+	cookie, err := request.Cookie("baize_session")
 	if err != nil {
 		return false
 	}

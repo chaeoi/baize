@@ -13,7 +13,7 @@ import (
 	"sync"
 	"syscall"
 
-	"xuanjian/shared/model"
+	"baize/shared/model"
 )
 
 type cpuTimes struct {

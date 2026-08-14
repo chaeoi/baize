@@ -14,10 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"xuanjian/agent/internal/agent"
-	"xuanjian/agent/internal/collector"
-	"xuanjian/agent/internal/config"
-	"xuanjian/shared/model"
+	"baize/agent/internal/agent"
+	"baize/agent/internal/collector"
+	"baize/agent/internal/config"
+	"baize/shared/model"
 )
 
 var version = "dev"

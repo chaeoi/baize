@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"strings"
 
-	"xuanjian/shared/model"
+	"baize/shared/model"
 )
 
 type Client struct {

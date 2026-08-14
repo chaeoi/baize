@@ -135,7 +135,7 @@ func Default() Config {
 		Motor: MotorConfig{
 			Topic:       "/motor/joint_states",
 			MessageType: "sensor_msgs/msg/JointState",
-			ROSSetup:    []string{"/opt/ros/humble/setup.bash", "/opt/xuanjian/agent/ros/setup.bash"},
+			ROSSetup:    []string{"/opt/ros/humble/setup.bash", "/opt/baize/agent/ros/setup.bash"},
 			ReadTimeout: Duration(3 * time.Second),
 			JointLabels: map[string]string{},
 			Definitions: make(map[string]MotorDefinition),
@@ -146,7 +146,7 @@ func Default() Config {
 			Timeout:         Duration(5 * time.Second),
 			QueryInterval:   Duration(2 * time.Second),
 			ROSTopic:        "/bms_can/battery_data",
-			ROSSetup:        []string{"/opt/ros/humble/setup.bash", "/opt/xuanjian/agent/ros/setup.bash"},
+			ROSSetup:        []string{"/opt/ros/humble/setup.bash", "/opt/baize/agent/ros/setup.bash"},
 			PublishInterval: Duration(2 * time.Second),
 			PublishTimeout:  Duration(4 * time.Second),
 		},
