@@ -20,10 +20,9 @@ COPY shared/model ./shared/model
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/baize ./dashboard/backend/cmd/baize
 
 FROM ${RUNTIME_IMAGE}
-RUN mkdir -p /data/control /data/history /config
+RUN mkdir -p /data/control /data/history
 COPY --from=backend-builder /out/baize /opt/baize/dashboard/bin/baize
 COPY dashboard/frontend /opt/baize/dashboard/frontend
-COPY dashboard/config.yml /config/config.example.yml
 EXPOSE 8080
 VOLUME ["/data"]
 ENTRYPOINT ["/opt/baize/dashboard/bin/baize"]

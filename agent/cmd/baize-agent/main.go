@@ -23,17 +23,24 @@ import (
 var version = "dev"
 
 func main() {
-	configPath := flag.String("config", "config.yml", "path to the agent YAML config")
+	uuid := flag.String("uuid", os.Getenv("BAIZE_AGENT_UUID"), "permanent robot UUID")
+	robotCode := flag.String("robot-code", os.Getenv("BAIZE_ROBOT_CODE"), "robot code")
+	robotModel := flag.String("robot-model", os.Getenv("BAIZE_ROBOT_MODEL"), "robot model compiled into this Agent")
+	dashboardURL := flag.String("dashboard-url", os.Getenv("BAIZE_DASHBOARD_URL"), "Dashboard base URL")
+	token := flag.String("token", os.Getenv("BAIZE_AGENT_TOKEN"), "Dashboard Agent token")
 	showVersion := flag.Bool("version", false, "print version and exit")
-	checkConfig := flag.Bool("check-config", false, "validate config and exit")
+	checkConfig := flag.Bool("check-config", false, "validate built-in model and installation identity, then exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
 		return
 	}
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Build(config.AgentConfig{
+		UUID: *uuid, RobotCode: *robotCode, RobotModel: *robotModel,
+		DashboardURL: *dashboardURL, Token: *token,
+	})
 	if err != nil {
-		slog.Error("load config", "error", err, "path", *configPath)
+		slog.Error("build runtime configuration", "error", err)
 		os.Exit(2)
 	}
 	if *checkConfig {
@@ -60,10 +67,6 @@ func run(ctx context.Context, cfg config.Config) error {
 	var bmsCollector *collector.BMSCollector
 	if cfg.BMS.Enabled {
 		bmsCollector = collector.NewBMSCollector(cfg.BMS)
-		go bmsCollector.Run(ctx)
-		if cfg.BMS.PublishROS2 {
-			go publishBMSLoop(ctx, cfg.BMS, bmsCollector)
-		}
 	}
 	if cfg.Update.Enabled && version != "dev" {
 		go updateLoop(ctx, cfg, dashboardClient)
@@ -75,6 +78,9 @@ func run(ctx context.Context, cfg config.Config) error {
 	for {
 		started := time.Now()
 		telemetry := collect(ctx, cfg, identity, systemCollector, motorCollector, bmsCollector)
+		if count := model.SanitizeFinite(&telemetry); count > 0 {
+			telemetry.Errors = append(telemetry.Errors, model.ComponentError{Component: "telemetry", Message: fmt.Sprintf("normalized %d non-finite sensor values", count), At: time.Now().UTC()})
+		}
 		reportCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
 		err := dashboardClient.Report(reportCtx, telemetry)
 		cancel()
@@ -139,32 +145,18 @@ func collect(ctx context.Context, cfg config.Config, robot model.Robot, systemCo
 		}()
 	}
 	if bmsCollector != nil {
-		metrics, err := bmsCollector.Snapshot()
-		result.BMS = &metrics
-		addError("bms", err)
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			metrics, err := bmsCollector.Collect(ctx)
+			mu.Lock()
+			result.BMS = &metrics
+			mu.Unlock()
+			addError("bms", err)
+		}()
 	}
 	wait.Wait()
 	return result
-}
-
-func publishBMSLoop(ctx context.Context, cfg config.BMSConfig, bms *collector.BMSCollector) {
-	ticker := time.NewTicker(cfg.PublishInterval.Value())
-	defer ticker.Stop()
-	for {
-		metrics, _ := bms.Snapshot()
-		if metrics.Online {
-			err := collector.PublishBMSROS2(ctx, cfg, metrics)
-			bms.MarkPublished(err == nil)
-			if err != nil {
-				slog.Warn("publish BMS ROS2 topic", "error", err)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
 
 func updateLoop(ctx context.Context, cfg config.Config, client *agent.Client) {

@@ -1,8 +1,9 @@
 # 电机采集说明
 
-电机采集由 `agent/profiles/<robot_model>.yml` 选择 transport：
+Baize Agent 只读取机器人已经发布的 ROS2
+`sensor_msgs/msg/JointState`。每个型号的内置 profile 定义 topic、关节标签和
+电机元数据，`position` 映射为弧度，`velocity` 映射为 rad/s，`effort` 映射为
+N m 转矩。
 
-- `ros2_topic`：只读取已经存在的 `sensor_msgs/msg/JointState`，映射位置、速度和 effort/转矩。
-- `can_query`：只发送 profile 明确声明的只读查询帧，按响应 ID、字节偏移、端序和缩放映射位置、速度和转矩。
-
-两种 transport 都输出相同的 `MotorState` 语义模型，因此 Dashboard 和公开 API 不关心底层设备 SDK。profile 不能执行任意 shell 命令，也不能发送电机控制或配置帧；需要新增型号时只新增并审核 profile 文件。
+Agent 不打开 SocketCAN、不发送电机指令，也不修改控制器或网络接口。需要支持
+新型号时，更新并发布包含新 ROS2 topic 映射的 Agent 二进制。

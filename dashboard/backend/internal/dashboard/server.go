@@ -75,6 +75,7 @@ func NewServer(cfg ServerConfig, store *Store) *Server {
 	mux.HandleFunc("/healthz", server.health)
 	mux.HandleFunc("/api/v1/session", server.session)
 	mux.HandleFunc("/api/v1/admin/password", server.requireSession(server.changePassword))
+	mux.HandleFunc("/api/v1/admin/agent-token", server.requireAdmin(server.agentToken))
 	mux.HandleFunc("/api/v1/robots", server.robots)
 	mux.HandleFunc("/api/v1/robots/", server.publicRobotAction)
 	mux.HandleFunc("/api/v1/ws/robots", server.publicRobotStream)
@@ -207,6 +208,14 @@ func (s *Server) changePassword(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true, "password_change_required": false})
+}
+
+func (s *Server) agentToken(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"agent_token": s.config.AgentToken})
 }
 
 func (s *Server) startSession(writer http.ResponseWriter, request *http.Request) error {

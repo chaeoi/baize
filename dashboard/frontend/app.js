@@ -423,7 +423,7 @@ function renderSettings() {
   ]);
   $('#settings-config-facts').innerHTML = facts([
     ['系统采集', telemetry.system ? '已启用' : '未上报'], ['CPU 核心', telemetry.system?.cpu_cores || '-'], ['磁盘路径', (telemetry.system?.disks || []).map((disk) => disk.path).join(', ') || '-'],
-    ['电机 Topic', motor.topic || '-'], ['电机来源', motor.source || '-'], ['BMS 协议', bms.protocol || '-'], ['BMS 接口', bms.interface || '-'], ['目标版本', robot.desired_version || '跟随发布']
+    ['电机 Topic', motor.topic || '-'], ['电机来源', motor.source || '-'], ['BMS 协议', bms.protocol || '-'], ['BMS Topic', bms.interface || '-'], ['目标版本', robot.desired_version || '跟随发布']
   ]);
   $('#update-button').disabled = !state.releases.some((release) => release.os === robot.os && release.arch === robot.arch);
   $('#settings-session').textContent = state.adminUser;

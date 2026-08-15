@@ -107,6 +107,34 @@ func TestAdminBootstrapPasswordRequiresChange(t *testing.T) {
 	}
 }
 
+func TestControlSecretPersistsOutsideHistoryDatabase(t *testing.T) {
+	root := t.TempDir()
+	options := StoreOptions{AdminUser: "admin", BootstrapPassword: "Baize@Admin1"}
+	store, err := NewStore(filepath.Join(root, "control"), filepath.Join(root, "history"), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, created, err := store.Secret("agent_token", 32)
+	if err != nil || !created || len(secret) != 64 {
+		t.Fatalf("initial secret = %q created=%v err=%v", secret, created, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, "history")); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewStore(filepath.Join(root, "control"), filepath.Join(root, "history"), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reused, created, err := reopened.Secret("agent_token", 32)
+	if err != nil || created || reused != secret {
+		t.Fatalf("persistent secret = %q created=%v err=%v", reused, created, err)
+	}
+}
+
 func TestLegacyStateAndReleaseAreMigratedIntoControlDatabase(t *testing.T) {
 	root := t.TempDir()
 	uuid := "52446a60-7483-4ba7-b8c7-b85f60b2a00f"

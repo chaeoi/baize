@@ -19,27 +19,16 @@ import (
 var version = "dev"
 
 func main() {
-	configPath := flag.String("config", "/config/config.yml", "path to the dashboard YAML config")
-	checkConfig := flag.Bool("check-config", false, "validate config and exit")
+	checkConfig := flag.Bool("check-config", false, "validate the built-in Dashboard configuration and exit")
 	flag.Parse()
-	var cfg dashboardconfig.Config
-	var generated dashboardconfig.GeneratedValues
-	var err error
-	if *checkConfig {
-		cfg, err = dashboardconfig.Load(*configPath)
-	} else {
-		cfg, generated, err = dashboardconfig.LoadOrCreate(*configPath)
-	}
+	cfg, err := dashboardconfig.Runtime()
 	if err != nil {
-		slog.Error("load dashboard config", "error", err, "path", *configPath)
+		slog.Error("load Dashboard runtime configuration", "error", err)
 		os.Exit(2)
 	}
 	if *checkConfig {
 		fmt.Println("config is valid")
 		return
-	}
-	if generated.AgentToken != "" || generated.AdminPassword {
-		slog.Warn("dashboard bootstrap config created", "path", *configPath, "admin_user", cfg.Dashboard.AdminUser, "default_password_enabled", generated.AdminPassword, "agent_token_generated", generated.AgentToken != "", "jwt_secret_generated", generated.JWTSecret != "")
 	}
 	store, err := dashboard.NewStore(cfg.Dashboard.DataDir, cfg.Dashboard.HistoryDataDir, dashboard.StoreOptions{
 		AdminUser: cfg.Dashboard.AdminUser, BootstrapPassword: cfg.Dashboard.AdminPassword,
@@ -51,9 +40,22 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	agentToken, agentTokenCreated, err := store.Secret("agent_token", 32)
+	if err != nil {
+		slog.Error("load Dashboard agent token", "error", err)
+		os.Exit(1)
+	}
+	jwtSecret, jwtSecretCreated, err := store.Secret("jwt_secret", 32)
+	if err != nil {
+		slog.Error("load Dashboard JWT secret", "error", err)
+		os.Exit(1)
+	}
+	if agentTokenCreated || jwtSecretCreated {
+		slog.Warn("Dashboard control secrets initialized", "agent_token_created", agentTokenCreated, "jwt_secret_created", jwtSecretCreated)
+	}
 	handler := dashboard.NewServer(dashboard.ServerConfig{
-		AgentToken: cfg.Dashboard.AgentToken, AdminUser: cfg.Dashboard.AdminUser,
-		JWTSecret: cfg.Dashboard.JWTSecret, FrontendDir: cfg.Dashboard.FrontendDir, CookieSecure: cfg.Dashboard.CookieSecure,
+		AgentToken: agentToken, AdminUser: cfg.Dashboard.AdminUser,
+		JWTSecret: jwtSecret, FrontendDir: cfg.Dashboard.FrontendDir, CookieSecure: cfg.Dashboard.CookieSecure,
 	}, store)
 	server := &http.Server{Addr: cfg.Dashboard.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
