@@ -84,16 +84,41 @@ else base_url="https://github.com/$repo/releases/download/$version"; fi
 curl --fail --location --silent --show-error "$base_url/$asset" -o "$tmp_dir/$asset"
 curl --fail --location --silent --show-error "$base_url/SHA256SUMS" -o "$tmp_dir/SHA256SUMS"
 (cd "$tmp_dir" && grep "  $asset\$" SHA256SUMS | sha256sum -c -) || die "release checksum verification failed"
-"$tmp_dir/$asset" --check-config --uuid "$robot_uuid" --robot-code "$robot_code" --robot-model "$robot_model" --dashboard-url "$dashboard_url" --token "$token"
 
-systemd_escape() {
-	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g'
+yaml_quote() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
-uuid_env=$(systemd_escape "$robot_uuid")
-code_env=$(systemd_escape "$robot_code")
-model_env=$(systemd_escape "$robot_model")
-url_env=$(systemd_escape "$dashboard_url")
-token_env=$(systemd_escape "$token")
+uuid_yaml=$(yaml_quote "$robot_uuid")
+code_yaml=$(yaml_quote "$robot_code")
+model_yaml=$(yaml_quote "$robot_model")
+url_yaml=$(yaml_quote "$dashboard_url")
+token_yaml=$(yaml_quote "$token")
+cat > "$tmp_dir/config.yml" <<EOF
+agent:
+  uuid: "$uuid_yaml"
+  robot_code: "$code_yaml"
+  robot_model: "$model_yaml"
+  dashboard_url: "$url_yaml"
+  token: "$token_yaml"
+  report_interval: "2s"
+  http_timeout: "10s"
+
+system:
+  enabled: true
+  disk_paths: ["/"]
+
+gpu:
+  enabled: true
+  command: "nvidia-smi"
+  timeout: "3s"
+
+update:
+  enabled: true
+  automatic: true
+  check_interval: "1m"
+EOF
+"$tmp_dir/$asset" --check-config --config "$tmp_dir/config.yml"
+
 cat > "$tmp_dir/baize-agent.service" <<EOF
 [Unit]
 Description=Baize robot monitoring agent
@@ -105,14 +130,9 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=$install_dir
-ExecStart=$install_dir/baize-agent
+ExecStart=$install_dir/baize-agent --config $install_dir/config.yml
 Restart=always
 RestartSec=3
-Environment="BAIZE_AGENT_UUID=$uuid_env"
-Environment="BAIZE_ROBOT_CODE=$code_env"
-Environment="BAIZE_ROBOT_MODEL=$model_env"
-Environment="BAIZE_DASHBOARD_URL=$url_env"
-Environment="BAIZE_AGENT_TOKEN=$token_env"
 Environment=ROS_LOG_DIR=/var/log/baize-agent/ros
 LogsDirectory=baize-agent
 LogsDirectoryMode=0750
@@ -131,6 +151,7 @@ EOF
 
 install -d -o root -g root -m 0755 "$install_dir"
 install -o root -g root -m 0755 "$tmp_dir/$asset" "$install_dir/baize-agent"
+install -o root -g root -m 0600 "$tmp_dir/config.yml" "$install_dir/config.yml"
 install -o root -g root -m 0600 "$tmp_dir/baize-agent.service" /etc/systemd/system/baize-agent.service
 systemctl daemon-reload
 systemctl enable --now baize-agent

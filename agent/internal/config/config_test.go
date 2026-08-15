@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestBuildUsesBuiltInRobotProfile(t *testing.T) {
 	cfg, err := Build(AgentConfig{
@@ -27,5 +31,49 @@ func TestBuildRejectsUnknownRobotModel(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unsupported model error")
+	}
+}
+
+func TestLoadUsesBuiltInProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	data := []byte(`agent:
+  uuid: 7fd34256-bf3a-4cf6-8da0-fbce40f34d11
+  robot_code: TEST
+  robot_model: 2m_v0.1.2
+  dashboard_url: https://dashboard.example.test
+  token: long-enough-agent-token
+  report_interval: 3s
+system:
+  enabled: true
+  disk_paths: ["/"]
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.ReportInterval.Value().Seconds() != 3 || cfg.Motor.Topic != "/motor/q2w_upper_motor_joint_state" || cfg.BMS.ROSTopic != "/bms_can/battery_data" {
+		t.Fatalf("unexpected loaded config: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsExternalProfileOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	data := []byte(`agent:
+  uuid: 7fd34256-bf3a-4cf6-8da0-fbce40f34d11
+  robot_code: TEST
+  robot_model: 2m_v0.1.2
+  dashboard_url: https://dashboard.example.test
+  token: long-enough-agent-token
+motor:
+  topic: /not-allowed
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected external motor profile to be rejected")
 	}
 }

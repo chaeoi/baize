@@ -23,6 +23,7 @@ FROM ${RUNTIME_IMAGE}
 RUN mkdir -p /data/control /data/history
 COPY --from=backend-builder /out/baize /opt/baize/dashboard/bin/baize
 COPY dashboard/frontend /opt/baize/dashboard/frontend
+COPY dashboard/config.yml.example /opt/baize/dashboard/config.yml
 EXPOSE 8080
 VOLUME ["/data"]
-ENTRYPOINT ["/opt/baize/dashboard/bin/baize"]
+ENTRYPOINT ["/opt/baize/dashboard/bin/baize", "--config", "/opt/baize/dashboard/config.yml"]

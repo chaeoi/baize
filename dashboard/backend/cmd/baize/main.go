@@ -19,11 +19,12 @@ import (
 var version = "dev"
 
 func main() {
-	checkConfig := flag.Bool("check-config", false, "validate the built-in Dashboard configuration and exit")
+	configPath := flag.String("config", "/opt/baize/dashboard/config.yml", "Dashboard configuration file")
+	checkConfig := flag.Bool("check-config", false, "validate Dashboard configuration and exit")
 	flag.Parse()
-	cfg, err := dashboardconfig.Runtime()
+	cfg, err := dashboardconfig.Load(*configPath)
 	if err != nil {
-		slog.Error("load Dashboard runtime configuration", "error", err)
+		slog.Error("load Dashboard configuration", "error", err, "path", *configPath)
 		os.Exit(2)
 	}
 	if *checkConfig {

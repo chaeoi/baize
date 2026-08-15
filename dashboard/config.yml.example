@@ -1,0 +1,11 @@
+dashboard:
+  admin_user: "admin"
+  admin_password: "Baize@Admin1"
+  password_change_required: true
+  listen: ":8080"
+  data_dir: "/data/control"
+  history_data_dir: "/data/history"
+  history_retention: "2160h"
+  history_sample_interval: "1m"
+  frontend_dir: "/opt/baize/dashboard/frontend"
+  cookie_secure: false

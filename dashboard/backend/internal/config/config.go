@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const DefaultAdminPassword = "Baize@Admin1"
@@ -13,6 +15,18 @@ const DefaultAdminPassword = "Baize@Admin1"
 type Duration time.Duration
 
 func (d Duration) Value() time.Duration { return time.Duration(d) }
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+		return errors.New("duration must be a string such as \"1m\" or \"2160h\"")
+	}
+	parsed, err := time.ParseDuration(value.Value)
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
+}
 
 type Config struct {
 	Dashboard DashboardConfig
@@ -31,8 +45,8 @@ type DashboardConfig struct {
 	CookieSecure           bool
 }
 
-// Default is compiled into the Dashboard image. Runtime paths are the stable
-// container contract; Docker port mapping controls the public listen port.
+// Default is compiled into the Dashboard image and copied out as the default
+// configuration file for deployments to adjust.
 func Default() Config {
 	return Config{Dashboard: DashboardConfig{
 		AdminUser:              "admin",
@@ -47,24 +61,71 @@ func Default() Config {
 	}}
 }
 
-// Runtime applies only deployment-safe environment overrides. There is no
-// YAML configuration file; secrets and mutable settings live in control.db.
-func Runtime() (Config, error) {
+type fileDashboardConfig struct {
+	AdminUser              *string   `yaml:"admin_user"`
+	AdminPassword          *string   `yaml:"admin_password"`
+	PasswordChangeRequired *bool     `yaml:"password_change_required"`
+	Listen                 *string   `yaml:"listen"`
+	DataDir                *string   `yaml:"data_dir"`
+	HistoryDataDir         *string   `yaml:"history_data_dir"`
+	HistoryRetention       *Duration `yaml:"history_retention"`
+	HistorySampleInterval  *Duration `yaml:"history_sample_interval"`
+	FrontendDir            *string   `yaml:"frontend_dir"`
+	CookieSecure           *bool     `yaml:"cookie_secure"`
+}
+
+type fileConfig struct {
+	Dashboard *fileDashboardConfig `yaml:"dashboard"`
+}
+
+// Load applies an explicit deployment configuration. Agent and JWT secrets
+// intentionally remain in control.db and are never accepted from YAML.
+func Load(path string) (Config, error) {
 	cfg := Default()
-	if value := strings.TrimSpace(os.Getenv("BAIZE_LISTEN")); value != "" {
-		cfg.Dashboard.Listen = value
+	input, err := os.Open(path)
+	if err != nil {
+		return cfg, err
 	}
-	if value := strings.TrimSpace(os.Getenv("BAIZE_DATA_DIR")); value != "" {
-		cfg.Dashboard.DataDir = value
+	defer input.Close()
+	var file fileConfig
+	decoder := yaml.NewDecoder(input)
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil {
+		return cfg, err
 	}
-	if value := strings.TrimSpace(os.Getenv("BAIZE_HISTORY_DATA_DIR")); value != "" {
-		cfg.Dashboard.HistoryDataDir = value
+	if file.Dashboard == nil {
+		return cfg, errors.New("dashboard configuration is required")
 	}
-	if value := strings.TrimSpace(os.Getenv("BAIZE_FRONTEND_DIR")); value != "" {
-		cfg.Dashboard.FrontendDir = value
+	d := file.Dashboard
+	if d.AdminUser != nil {
+		cfg.Dashboard.AdminUser = *d.AdminUser
 	}
-	if value := strings.TrimSpace(os.Getenv("BAIZE_COOKIE_SECURE")); value != "" {
-		cfg.Dashboard.CookieSecure = value == "1" || strings.EqualFold(value, "true")
+	if d.AdminPassword != nil {
+		cfg.Dashboard.AdminPassword = *d.AdminPassword
+	}
+	if d.PasswordChangeRequired != nil {
+		cfg.Dashboard.PasswordChangeRequired = *d.PasswordChangeRequired
+	}
+	if d.Listen != nil {
+		cfg.Dashboard.Listen = *d.Listen
+	}
+	if d.DataDir != nil {
+		cfg.Dashboard.DataDir = *d.DataDir
+	}
+	if d.HistoryDataDir != nil {
+		cfg.Dashboard.HistoryDataDir = *d.HistoryDataDir
+	}
+	if d.HistoryRetention != nil {
+		cfg.Dashboard.HistoryRetention = *d.HistoryRetention
+	}
+	if d.HistorySampleInterval != nil {
+		cfg.Dashboard.HistorySampleInterval = *d.HistorySampleInterval
+	}
+	if d.FrontendDir != nil {
+		cfg.Dashboard.FrontendDir = *d.FrontendDir
+	}
+	if d.CookieSecure != nil {
+		cfg.Dashboard.CookieSecure = *d.CookieSecure
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
@@ -76,6 +137,9 @@ func (c Config) Validate() error {
 	d := c.Dashboard
 	if strings.TrimSpace(d.AdminUser) == "" || strings.ContainsAny(d.AdminUser, "\r\n\t ") {
 		return errors.New("dashboard.admin_user must be a non-empty username without whitespace")
+	}
+	if strings.TrimSpace(d.AdminPassword) == "" {
+		return errors.New("dashboard.admin_password must not be empty")
 	}
 	if strings.TrimSpace(d.Listen) == "" {
 		return errors.New("dashboard.listen must not be empty")
