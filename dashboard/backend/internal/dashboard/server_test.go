@@ -151,6 +151,9 @@ func TestPublicHistoryIsCrossOriginAndRedacted(t *testing.T) {
 	if response.Code != http.StatusOK || response.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Fatalf("public history status=%d CORS=%q body=%s", response.Code, response.Header().Get("Access-Control-Allow-Origin"), response.Body.String())
 	}
+	if policy := response.Header().Get("Content-Security-Policy"); !strings.Contains(policy, "style-src 'self' https://registry.npmmirror.com") || !strings.Contains(policy, "font-src 'self' https://registry.npmmirror.com") {
+		t.Fatalf("font CDN is not allowlisted in CSP: %q", policy)
+	}
 	body := response.Body.String()
 	for _, sensitive := range []string{uuid, "private-host", "can0", "arm64"} {
 		if strings.Contains(body, sensitive) {

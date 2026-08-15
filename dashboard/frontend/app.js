@@ -21,6 +21,7 @@ const state = {
   publicHistoryMode: 'host',
   publicHistoryMotor: '',
   publicHistoryMetric: 'torque_nm',
+  publicHistoryDrawKey: '',
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -39,6 +40,7 @@ async function boot() {
     return;
   }
   state.view = 'display';
+  state.selected = publicRobotIDFromLocation();
   showApp();
   openStream('public');
 }
@@ -61,10 +63,16 @@ function bindEvents() {
   $('#delete-robot-form').addEventListener('submit', deleteRobot);
   $('#history-range').addEventListener('change', loadHistory);
   $('#public-history-range').addEventListener('change', () => loadPublicHistory(selectedPublicRobot()));
-  $('#public-metric-select').addEventListener('change', (event) => { state.publicHistoryMetric = event.target.value; drawPublicHistory(state.publicHistory); });
-  $('#public-motor-select').addEventListener('change', (event) => { state.publicHistoryMotor = event.target.value; drawPublicHistory(state.publicHistory); });
+  $('#public-metric-select').addEventListener('change', (event) => { state.publicHistoryMetric = event.target.value; state.publicHistoryDrawKey = ''; drawPublicHistory(state.publicHistory); });
+  $('#public-motor-select').addEventListener('change', (event) => { state.publicHistoryMotor = event.target.value; state.publicHistoryDrawKey = ''; drawPublicHistory(state.publicHistory); });
   $$('[data-public-mode]').forEach((button) => button.addEventListener('click', () => setPublicHistoryMode(button.dataset.publicMode)));
-  window.addEventListener('resize', () => { drawHistoryChart(state.history); drawPublicHistory(state.publicHistory); });
+  $('#back-to-fleet').addEventListener('click', (event) => { event.preventDefault(); showFleet(); });
+  window.addEventListener('popstate', syncPublicRoute);
+  window.addEventListener('resize', () => {
+    drawHistoryChart(state.history);
+    state.publicHistoryDrawKey = '';
+    drawPublicHistory(state.publicHistory);
+  });
   $$('.dialog-close').forEach((button) => button.addEventListener('click', () => button.closest('dialog').close()));
 }
 
@@ -110,6 +118,7 @@ function showApp() {
   $('#settings-view').classList.toggle('hidden', state.view !== 'settings');
   $('#logout-button').classList.toggle('hidden', !state.authenticated);
   $('#change-password-button').classList.toggle('hidden', !state.authenticated || state.view !== 'settings');
+  $('#dashboard-link').classList.toggle('hidden', state.view === 'settings');
 }
 
 function enterDashboard() {
@@ -269,13 +278,19 @@ function receiveEvent(event, mode) {
     if (index === -1) state.robots.push(event.robot);
     else state.robots[index] = event.robot;
   }
-  if (event.server_time) {
+  if (event.server_time && $('#fleet-latency')) {
     const serverTime = Date.parse(event.server_time);
     if (Number.isFinite(serverTime)) $('#fleet-latency').textContent = `${Math.max(0, Date.now() - serverTime)} ms`;
   }
   const eventDate = event.robot?.collected_at || event.server_time;
   $('#last-event').textContent = eventDate ? `最新 ${relativeTime(eventDate)}` : '实时数据';
-  if (!state.selected || !state.robots.some((robot) => robotKey(robot, mode) === state.selected)) state.selected = state.robots[0] ? robotKey(state.robots[0], mode) : null;
+  if (mode === 'admin') {
+    if (!state.selected || !state.robots.some((robot) => robotKey(robot, mode) === state.selected)) state.selected = state.robots[0] ? robotKey(state.robots[0], mode) : null;
+  } else {
+    const routeID = publicRobotIDFromLocation();
+    state.selected = routeID || null;
+    if (event.type === 'removed' && routeID === event.id) showFleet(true);
+  }
   render();
   if (mode === 'admin' && state.selected && state.historyRobot !== state.selected && !state.historyLoading) loadHistory();
 }
@@ -294,32 +309,52 @@ function render() {
 
 function renderPublic() {
   const robots = state.robots;
+  const robot = robots.find((item) => item.id === state.selected);
+  if (state.selected && !robot && robots.length) {
+    showFleet(true);
+    return;
+  }
+  const detailOpen = Boolean(robot);
+  $('#fleet-page').classList.toggle('hidden', detailOpen);
+  $('#robot-page').classList.toggle('hidden', !detailOpen);
+  if (detailOpen) {
+    renderPublicDetail(robot);
+    return;
+  }
   const online = robots.filter(isPublicOnline).length;
   const alerts = robots.reduce((total, robot) => total + (robot.summary?.diagnostic_count || 0), 0);
   $('#fleet-total').textContent = robots.length;
   $('#fleet-online').textContent = online;
   $('#fleet-alerts').textContent = alerts;
   $('#fleet-health').textContent = robots.length ? `${Math.round((online / robots.length) * 100)}% 正常运行` : '等待上报';
-  $('#directory-count').textContent = robots.length;
   renderRobotList();
-  const robot = robots.find((item) => item.id === state.selected);
-  $('#empty-state').classList.toggle('hidden', Boolean(robot));
-  $('#robot-detail').classList.toggle('hidden', !robot);
-  if (robot) renderPublicDetail(robot);
+  $('#empty-state').classList.toggle('hidden', robots.length > 0);
 }
 
 function renderRobotList() {
   const query = ($('#robot-search')?.value || '').trim().toLowerCase();
   const robots = state.robots.filter((robot) => [robot.code, robot.model, robot.remark].some((value) => (value || '').toLowerCase().includes(query)));
-  $('#robot-list').innerHTML = robots.map((robot) => `
-    <button class="robot-item ${robot.id === state.selected ? 'active' : ''}" data-key="${escapeHTML(robot.id)}" type="button">
-      <span class="dot ${isPublicOnline(robot) ? 'online' : ''}"></span>
-      <span><strong>${escapeHTML(robot.code)}</strong><small>${escapeHTML(robot.remark || robot.model || '未命名设备')}</small></span>
-      <time>${relativeTime(robot.last_seen)}</time>
-    </button>`).join('') || '<div class="empty-line">没有匹配设备</div>';
-  $$('#robot-list .robot-item').forEach((button) => button.addEventListener('click', () => {
-    if (state.selected !== button.dataset.key) { state.publicHistory = []; state.publicHistoryRobot = null; }
-    state.selected = button.dataset.key; render();
+  $('#robot-list').innerHTML = robots.map((robot) => {
+    const summary = robot.summary || {};
+    const battery = summary.battery;
+    const online = isPublicOnline(robot);
+    const metric = (label, value, sub, level) => `<div class="robot-card-metric"><span>${label}</span><strong>${value}</strong><div class="meter"><i class="${meterClass(level)}"></i></div><small>${sub}</small></div>`;
+    return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="/robot/${encodeURIComponent(robot.id)}">
+      <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong><small>${escapeHTML(robot.remark || robot.model || '未命名设备')}</small></div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
+      <div class="robot-card-meta"><span>${escapeHTML(robot.model || '未知型号')}</span><time>${relativeTime(robot.last_seen)}</time></div>
+      <div class="robot-card-metrics">
+        ${metric('CPU', summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', `负载 ${fixed(summary.load_1)}`, summary.cpu_percent)}
+        ${metric('内存', summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', '系统内存', summary.memory_percent)}
+        ${metric('磁盘', summary.has_telemetry ? `${fixed(summary.disk_percent)}%` : '--', '根目录', summary.disk_percent)}
+        ${metric('电池', battery?.online ? `${fixed(battery.soc_percent)}%` : '--', battery?.online ? `${fixed(battery.voltage)} V` : '未接入', battery?.soc_percent)}
+      </div>
+      <footer><span>${summary.gpu ? `GPU ${fixed(summary.gpu.utilization_percent)}%` : 'GPU 无数据'}</span><span>${summary.motor_count || 0} 个电机</span><span class="robot-card-diagnostic ${summary.diagnostic_count ? 'has-alert' : ''}">${summary.diagnostic_count ? `${summary.diagnostic_count} 项诊断` : '诊断正常'}</span></footer>
+    </a>`;
+  }).join('') || '<div class="empty-line">没有匹配设备</div>';
+  $$('#robot-list .robot-card').forEach((card) => card.addEventListener('click', (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    openPublicRobot(card.dataset.key);
   }));
 }
 
@@ -358,12 +393,51 @@ function renderPublicDetail(robot) {
 
 function selectedPublicRobot() { return state.robots.find((robot) => robot.id === state.selected); }
 
+function publicRobotIDFromLocation() {
+  const match = window.location.pathname.match(/^\/robot\/([^/]+)\/?$/);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return null; }
+}
+
+function openPublicRobot(id) {
+  if (!id || state.selected === id) return;
+  state.selected = id;
+  state.publicHistory = [];
+  state.publicHistoryRobot = null;
+  state.publicHistoryDrawKey = '';
+  window.history.pushState({}, '', `/robot/${encodeURIComponent(id)}`);
+  render();
+}
+
+function showFleet(replace = false) {
+  state.selected = null;
+  state.publicHistory = [];
+  state.publicHistoryRobot = null;
+  state.publicHistoryDrawKey = '';
+  if (replace) window.history.replaceState({}, '', '/');
+  else window.history.pushState({}, '', '/');
+  render();
+}
+
+function syncPublicRoute() {
+  if (state.view !== 'display') return;
+  const id = publicRobotIDFromLocation();
+  if (id !== state.selected) {
+    state.selected = id;
+    state.publicHistory = [];
+    state.publicHistoryRobot = null;
+    state.publicHistoryDrawKey = '';
+  }
+  render();
+}
+
 function renderPublicHistoryControls() {
   const motors = new Map();
   state.publicHistory.forEach((point) => (point.motors || []).forEach((motor) => motors.set(motor.id, motor.label || motor.id)));
   const motorSelect = $('#public-motor-select');
   const current = state.publicHistoryMotor;
-  motorSelect.innerHTML = [...motors.entries()].map(([id, label]) => `<option value="${escapeHTML(id)}">${escapeHTML(label)}</option>`).join('');
+  const motorOptions = [...motors.entries()].map(([id, label]) => `<option value="${escapeHTML(id)}">${escapeHTML(label)}</option>`).join('');
+  if (motorSelect.innerHTML !== motorOptions) motorSelect.innerHTML = motorOptions;
   if (motors.size && (!current || !motors.has(current))) state.publicHistoryMotor = motors.keys().next().value;
   motorSelect.value = state.publicHistoryMotor;
   motorSelect.classList.toggle('hidden', state.publicHistoryMode !== 'single' || !motors.size);
@@ -373,6 +447,7 @@ function renderPublicHistoryControls() {
 
 function setPublicHistoryMode(mode) {
   state.publicHistoryMode = mode;
+  state.publicHistoryDrawKey = '';
   renderPublicHistoryControls();
   drawPublicHistory(state.publicHistory);
 }
@@ -380,6 +455,8 @@ function setPublicHistoryMode(mode) {
 async function loadPublicHistory(robot) {
   if (!robot || state.publicHistoryLoading) return;
   state.publicHistoryLoading = true;
+  state.publicHistoryDrawKey = '';
+  $('#public-chart-grid').innerHTML = '';
   $('#public-history-empty').textContent = '正在读取历史采样';
   $('#public-history-empty').classList.remove('hidden');
   try {
@@ -388,6 +465,7 @@ async function loadPublicHistory(robot) {
     if (state.selected !== robot.id) return;
     state.publicHistory = data.points || [];
     state.publicHistoryRobot = robot.id;
+    state.publicHistoryDrawKey = '';
     renderPublicHistoryControls();
     drawPublicHistory(state.publicHistory);
   } catch (error) {
@@ -575,7 +653,7 @@ function drawHistoryChart(points) {
   const chartHeight = height - padding.top - padding.bottom;
   context.strokeStyle = '#dfe6e8';
   context.fillStyle = '#73818a';
-  context.font = '11px system-ui';
+  context.font = '11px "LXGW WenKai Screen", system-ui';
   context.lineWidth = 1;
   for (let value = 0; value <= 100; value += 25) {
     const y = padding.top + chartHeight * (1 - value / 100);
@@ -607,73 +685,117 @@ function drawHistoryChart(points) {
 }
 
 function drawPublicHistory(points) {
-  const canvas = $('#public-history-chart');
-  if (!canvas || !selectedPublicRobot()) return;
-  const mode = state.publicHistoryMode;
-  const available = points.filter((point) => mode === 'host' ? Number.isFinite(Number(point.cpu_percent)) || Number.isFinite(Number(point.memory_percent)) : (point.motors || []).length);
+  const grid = $('#public-chart-grid');
+  if (!grid || !selectedPublicRobot()) return;
+  const specs = publicChartSpecs(points).filter((spec) => finiteSeriesValues(points, spec).length > 1);
+  const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width)]);
+  if (drawKey === state.publicHistoryDrawKey && grid.childElementCount) return;
   const empty = $('#public-history-empty');
-  empty.classList.toggle('hidden', available.length > 1);
-  if (available.length <= 1) {
-    empty.textContent = available.length ? '已有 1 个采样点' : '暂无历史采样';
-    $('#public-history-meta').textContent = available.length ? '已有 1 个采样点' : '暂无历史采样';
-    $('#public-chart-legend').innerHTML = '';
+  empty.classList.toggle('hidden', specs.length > 0);
+  if (!specs.length) {
+    empty.textContent = points.length ? '当前维度暂无足够的历史采样' : '等待形成历史采样';
+    grid.innerHTML = '';
+    $('#public-history-meta').textContent = points.length ? `已有 ${points.length} 个采样点` : '暂无历史采样';
+    state.publicHistoryDrawKey = drawKey;
     return;
   }
+  grid.innerHTML = specs.map((spec, index) => {
+    const values = finiteSeriesValues(points, spec);
+    const latest = values.at(-1)?.value;
+    return `<article class="chart-card"><header><div><span>${escapeHTML(spec.group)}</span><h3>${escapeHTML(spec.label)}</h3></div><strong>${escapeHTML(formatChartValue(latest, spec))}</strong></header><div class="chart-canvas"><canvas data-chart-index="${index}"></canvas></div><footer><span>${escapeHTML(formatChartTime(values[0]?.at))}</span><span>${escapeHTML(formatChartTime(values.at(-1)?.at))}</span></footer></article>`;
+  }).join('');
+  $$('#public-chart-grid canvas').forEach((canvas) => drawSingleMetricChart(canvas, points, specs[Number(canvas.dataset.chartIndex)]));
+  const latestAt = points.at(-1)?.at;
+  $('#public-history-meta').textContent = `${points.length} 个采样点 · ${latestAt ? `${relativeTime(latestAt)}更新` : '暂无更新时间'}`;
+  state.publicHistoryDrawKey = drawKey;
+}
+
+function publicChartSpecs(points) {
+  const host = [
+    ['cpu_percent', 'CPU 使用率', '%', '#2f7d73', [0, 100]], ['memory_percent', '内存使用率', '%', '#3975a7', [0, 100]],
+    ['disk_percent', '磁盘使用率', '%', '#6d7088', [0, 100]], ['load_1', '系统负载', '', '#a46a22'],
+    ['temperature_max', '最高温度', '°C', '#b44d42'], ['gpu_utilization_percent', 'GPU 使用率', '%', '#517b46', [0, 100]],
+    ['battery_soc_percent', '电池电量', '%', '#17835f', [0, 100]], ['battery_voltage', '电池电压', 'V', '#396eae'],
+    ['battery_current', '电池电流', 'A', '#8e5e96'], ['battery_power_watts', '电池功率', 'W', '#ae7622']
+  ];
+  if (state.publicHistoryMode === 'host') return host.map(([field, label, unit, color, range]) => ({ key: field, group: '主机性能', label, unit, color, range, value: (point) => point[field] }));
+  const motors = [...new Map(points.flatMap((point) => (point.motors || []).map((motor) => [motor.id, motor.label || motor.id]))).entries()];
+  const metric = {
+    torque_nm: ['转矩', 'N·m', '#b66b24'], velocity_rad_per_sec: ['速度', 'rad/s', '#3676ac'], position_rad: ['位置', 'rad', '#79559c']
+  };
+  if (state.publicHistoryMode === 'motors') {
+    const [label, unit, color] = metric[state.publicHistoryMetric];
+    return motors.map(([id, motorLabel]) => ({ key: `motor:${id}:${state.publicHistoryMetric}`, group: motorLabel, label, unit, color, value: (point) => (point.motors || []).find((motor) => motor.id === id)?.[state.publicHistoryMetric] }));
+  }
+  const selected = motors.find(([id]) => id === state.publicHistoryMotor);
+  if (!selected) return [];
+  return Object.entries(metric).map(([field, [label, unit, color]]) => ({ key: `motor:${selected[0]}:${field}`, group: selected[1], label, unit, color, value: (point) => (point.motors || []).find((motor) => motor.id === selected[0])?.[field] }));
+}
+
+function finiteSeriesValues(points, spec) {
+  return points.map((point) => ({ at: point.at, value: Number(spec.value(point)) })).filter((entry) => Number.isFinite(entry.value));
+}
+
+function drawSingleMetricChart(canvas, points, spec) {
+  const values = points.map((point) => Number(spec.value(point)));
+  const finite = values.filter(Number.isFinite);
+  if (finite.length < 2) return;
   const bounds = canvas.parentElement.getBoundingClientRect();
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  const width = Math.max(300, Math.floor(bounds.width));
-  const height = Math.max(190, Math.floor(bounds.height));
+  const width = Math.max(260, Math.floor(bounds.width));
+  const height = Math.max(162, Math.floor(bounds.height));
   canvas.width = Math.floor(width * ratio); canvas.height = Math.floor(height * ratio);
-  const context = canvas.getContext('2d'); context.setTransform(ratio, 0, 0, ratio, 0, 0); context.clearRect(0, 0, width, height);
-  const padding = { top: 17, right: 16, bottom: 28, left: 43 }; const chartWidth = width - padding.left - padding.right; const chartHeight = height - padding.top - padding.bottom;
-  context.strokeStyle = '#dfe6e8'; context.fillStyle = '#73818a'; context.font = '11px system-ui'; context.lineWidth = 1;
-  for (let value = 0; value <= 100; value += 25) { const y = padding.top + chartHeight * (1 - value / 100); context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke(); const axisLabel = mode === 'host' ? `${value}%` : value === 100 ? '高' : value === 0 ? '低' : ''; if (axisLabel) context.fillText(axisLabel, 5, y + 4); }
-  let series = [];
-  if (mode === 'host') series = [['cpu_percent', 'CPU', '#2376bc'], ['memory_percent', '内存', '#65758b'], ['battery_soc_percent', '电池', '#0d8d65']];
-  else if (mode === 'motors') {
-    const ids = [...new Map(points.flatMap((point) => (point.motors || []).map((motor) => [motor.id, motor.label || motor.id]))).entries()];
-    series = ids.map(([id, label], index) => [`motor:${id}`, label, `hsl(${(index * 37) % 360} 58% 42%)`]);
-  } else series = [['position_rad', '位置', '#8a5db8'], ['velocity_rad_per_sec', '速度', '#2376bc'], ['torque_nm', '转矩', '#c17a20']];
-  $('#public-chart-legend').innerHTML = series.map((item, index) => {
-    const range = mode === 'host' ? '' : formatSeriesRange(points, item[0]);
-    return `<span><i class="series-swatch series-color-${index % 32}"></i>${escapeHTML(item[1])}${range ? `<small>${escapeHTML(range)}</small>` : ''}</span>`;
-  }).join('');
-  series.forEach(([field, label, color]) => {
-    context.strokeStyle = color; context.lineWidth = 2; context.lineJoin = 'round'; context.lineCap = 'round'; context.beginPath(); let started = false;
-    available.forEach((point, index) => {
-      let value;
-      if (field.startsWith('motor:')) value = Number((point.motors || []).find((motor) => motor.id === field.slice(6))?.[state.publicHistoryMetric]);
-      else if (mode === 'single') value = Number((point.motors || []).find((motor) => motor.id === state.publicHistoryMotor)?.[field]);
-      else value = Number(point[field]);
-      if (!Number.isFinite(value)) { started = false; return; }
-      const x = padding.left + chartWidth * (index / (available.length - 1)); const normalized = mode === 'host' ? value : normalizeSeriesValue(points, field, value); const y = padding.top + chartHeight * (1 - Math.max(0, Math.min(100, normalized)) / 100);
-      if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
-    }); context.stroke();
+  const context = canvas.getContext('2d');
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  const padding = { top: 12, right: 12, bottom: 12, left: 49 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  let min = spec.range?.[0] ?? Math.min(...finite);
+  let max = spec.range?.[1] ?? Math.max(...finite);
+  if (!spec.range) {
+    if (min === max) { const delta = Math.max(Math.abs(min) * 0.12, 1); min -= delta; max += delta; }
+    else { const delta = (max - min) * 0.12; min -= delta; max += delta; }
+  }
+  context.font = '11px "LXGW WenKai Screen", system-ui';
+  context.lineWidth = 1;
+  context.strokeStyle = '#e4e7eb';
+  context.fillStyle = '#7a838d';
+  for (let index = 0; index <= 4; index += 1) {
+    const y = padding.top + chartHeight * (index / 4);
+    context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+    const value = max - (max - min) * (index / 4);
+    context.fillText(formatAxisValue(value, spec.unit), 3, y + 4);
+  }
+  context.strokeStyle = spec.color;
+  context.lineWidth = 2;
+  context.lineJoin = 'round';
+  context.lineCap = 'round';
+  context.beginPath();
+  let started = false;
+  values.forEach((value, index) => {
+    if (!Number.isFinite(value)) { started = false; return; }
+    const x = padding.left + chartWidth * (points.length === 1 ? .5 : index / (points.length - 1));
+    const y = padding.top + chartHeight * (1 - (value - min) / (max - min));
+    if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
   });
-  const first = new Date(available[0].at); const last = new Date(available[available.length - 1].at); context.fillStyle = '#73818a';
-  const firstLabel = first.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); const lastLabel = last.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-  context.fillText(firstLabel, padding.left, height - 7); context.fillText(lastLabel, width - padding.right - context.measureText(lastLabel).width, height - 7); $('#public-history-meta').textContent = `${available.length} 个采样点 · ${relativeTime(available[available.length - 1].at)}更新`;
+  context.stroke();
 }
 
-function normalizeSeriesValue(points, field, value) {
-  const values = points.flatMap((point) => {
-    if (field.startsWith('motor:')) return Number((point.motors || []).find((motor) => motor.id === field.slice(6))?.[state.publicHistoryMetric]);
-    return Number((point.motors || []).find((motor) => motor.id === state.publicHistoryMotor)?.[field]);
-  }).filter(Number.isFinite);
-  if (!values.length) return 50;
-  const min = Math.min(...values); const max = Math.max(...values);
-  return max === min ? 50 : ((value - min) / (max - min)) * 100;
+function formatChartValue(value, spec) {
+  if (!Number.isFinite(value)) return '--';
+  const digits = Math.abs(value) >= 100 ? 0 : Math.abs(value) >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)}${spec.unit ? ` ${spec.unit}` : ''}`;
 }
 
-function formatSeriesRange(points, field) {
-  const values = points.flatMap((point) => {
-    if (field.startsWith('motor:')) return Number((point.motors || []).find((motor) => motor.id === field.slice(6))?.[state.publicHistoryMetric]);
-    return Number((point.motors || []).find((motor) => motor.id === state.publicHistoryMotor)?.[field]);
-  }).filter(Number.isFinite);
-  if (!values.length) return '';
-  const metric = field.startsWith('motor:') ? state.publicHistoryMetric : field;
-  const unit = { torque_nm: 'N·m', velocity_rad_per_sec: 'rad/s', position_rad: 'rad' }[metric] || '';
-  return `${Math.min(...values).toFixed(1)}–${Math.max(...values).toFixed(1)} ${unit}`;
+function formatAxisValue(value, unit) {
+  const digits = Math.abs(value) >= 100 ? 0 : Math.abs(value) >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)}${unit ? ` ${unit}` : ''}`;
+}
+
+function formatChartTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 function selectedAdminRobot() { return state.robots.find((robot) => robot.uuid === state.selected); }
@@ -689,10 +811,45 @@ function setMetric(name, value, display, sub) {
   meter.className = `level-${Math.round(safe / 5) * 5}`;
 }
 
+function meterClass(value) {
+  const safe = Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : 0;
+  return `level-${Math.round(safe / 5) * 5}`;
+}
+
 function facts(items) { return items.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value === undefined || value === null || value === '' ? '-' : String(value))}</dd></div>`).join(''); }
 function updateClock() {
   $('#server-clock').textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-  if (state.view === 'display' && state.robots.length) renderPublic();
+  if (state.view !== 'display' || !state.robots.length) return;
+  updatePublicLiveState();
+}
+
+function updatePublicLiveState() {
+  const latest = state.robots.reduce((value, robot) => !value || Date.parse(robot.last_seen) > Date.parse(value) ? robot.last_seen : value, '');
+  if (latest) $('#last-event').textContent = `最新 ${relativeTime(latest)}`;
+  const selected = selectedPublicRobot();
+  if (selected) {
+    const online = isPublicOnline(selected);
+    $('#detail-updated-text').textContent = `采集于 ${formatDate(selected.collected_at)} · ${relativeTime(selected.last_seen)}收到`;
+    $('#robot-status').textContent = online ? '在线运行' : '离线';
+    $('#robot-status').classList.toggle('online', online);
+    $('#detail-beacon').classList.toggle('online', online);
+    return;
+  }
+  const online = state.robots.filter(isPublicOnline).length;
+  $('#fleet-online').textContent = online;
+  $('#fleet-health').textContent = `${Math.round((online / state.robots.length) * 100)}% 正常运行`;
+  state.robots.forEach((robot) => {
+    const card = document.querySelector(`.robot-card[data-key="${CSS.escape(robot.id)}"]`);
+    if (!card) return;
+    const active = isPublicOnline(robot);
+    card.classList.toggle('online', active);
+    card.classList.toggle('offline', !active);
+    card.querySelector('.robot-presence')?.classList.toggle('online', active);
+    const label = card.querySelector('.status-label');
+    if (label) { label.textContent = active ? '在线' : '离线'; label.classList.toggle('online', active); }
+    const time = card.querySelector('time');
+    if (time) time.textContent = relativeTime(robot.last_seen);
+  });
 }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN', { hour12: false }); }
 function relativeTime(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (!Number.isFinite(seconds)) return '-'; if (seconds < 2) return '刚刚'; if (seconds < 60) return `${seconds} 秒前`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes} 分钟前`; return `${Math.floor(minutes / 60)} 小时前`; }

@@ -736,7 +736,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		writer.Header().Set("X-Frame-Options", "DENY")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
 		writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' https://registry.npmmirror.com; font-src 'self' https://registry.npmmirror.com; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
 		next.ServeHTTP(writer, request)
 	})
 }
