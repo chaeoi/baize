@@ -151,7 +151,9 @@ EOF
 
 install -d -o root -g root -m 0755 "$install_dir"
 install -o root -g root -m 0755 "$tmp_dir/$asset" "$install_dir/baize-agent"
-install -o root -g root -m 0600 "$tmp_dir/config.yml" "$install_dir/config.yml"
+# The ROS 2 agent runs as ubuntu, so keep the token root-owned but grant only
+# that service account's group read access.
+install -o root -g ubuntu -m 0640 "$tmp_dir/config.yml" "$install_dir/config.yml"
 install -o root -g root -m 0600 "$tmp_dir/baize-agent.service" /etc/systemd/system/baize-agent.service
 systemctl daemon-reload
 systemctl enable --now baize-agent

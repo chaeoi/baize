@@ -43,7 +43,7 @@ JWT 密钥不写入 YAML，而是保存在 control DB。
 ## Agent
 
 GitHub Actions 构建 Linux AMD64/ARM64 静态 Agent；机器人只下载经 SHA-256 校验
-的 Release 二进制。安装器会生成 root-only 的 `/opt/baize/agent/config.yml`，其中
+的 Release 二进制。安装器会生成由 root 所有、仅 Agent 服务账户可读的 `/opt/baize/agent/config.yml`，其中
 包含机器人身份、Dashboard 凭据和 `robot_model`。topic、电机清单、电池 ROS2
 消息格式均由二进制内置 profile 决定，配置文件不能覆盖。
 
