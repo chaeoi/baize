@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,12 +60,32 @@ func TestMotorCollectorReadsSimulatedROS2Topic(t *testing.T) {
 	if err := os.WriteFile(setup, []byte("export PATH='"+binDir+"':$PATH\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	collector := NewMotorCollector(config.MotorConfig{Enabled: true, Source: "ros2_topic", Topic: "/motor/joint_states", MessageType: "sensor_msgs/msg/JointState", ROSSetup: []string{setup}, ReadTimeout: config.Duration(2 * time.Second)})
+	collector := NewMotorCollector(config.MotorConfig{Enabled: true, Topic: "/motor/joint_states", MessageType: "sensor_msgs/msg/JointState", ROSSetup: []string{setup}, ReadTimeout: config.Duration(2 * time.Second)})
 	snapshot, err := collector.Collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !snapshot.TopicOnline || len(snapshot.Motors) != 1 || snapshot.Motors[0].VelocityRadPerSec != 2.5 || snapshot.Motors[0].TorqueNm != 3.5 {
 		t.Fatalf("unexpected simulated ROS2 snapshot: %+v", snapshot)
+	}
+}
+
+func TestROSCommandExportsEnvironment(t *testing.T) {
+	command, err := rosCommand(nil, map[string]string{"ROS_LOCALHOST_ONLY": "1"}, "", "ros2 topic echo --once '/motor/state'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(command, "export ROS_LOCALHOST_ONLY='1'") {
+		t.Fatalf("ROS environment was not exported: %s", command)
+	}
+}
+
+func TestROSCommandDropsRootToProfileUser(t *testing.T) {
+	command, err := wrapROSCommand("exec ros2 topic echo --once '/motor/state'", "ubuntu", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(command, "/usr/bin/setpriv --reset-env") || !strings.Contains(command, "--reuid='ubuntu'") {
+		t.Fatalf("ROS user transition was not configured: %s", command)
 	}
 }

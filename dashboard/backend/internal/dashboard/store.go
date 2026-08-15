@@ -3,7 +3,9 @@ package dashboard
 import (
 	"bytes"
 	"compress/zlib"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -396,6 +398,31 @@ func (s *Store) ensureAdmin(username, bootstrapPassword string, forceChange bool
 	}
 	_, err = s.control.Exec(`INSERT INTO admin_accounts(username, password_hash, force_change) VALUES(?, ?, ?)`, username, string(hash), boolInt(forceChange))
 	return err
+}
+
+// Secret returns a persistent control-plane secret. Secrets are kept in the
+// control database so copying that database is sufficient to migrate the
+// Dashboard identity; the disposable history database is never involved.
+func (s *Store) Secret(key string, size int) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var value string
+	err := s.control.QueryRow(`SELECT value FROM control_meta WHERE key = ?`, key).Scan(&value)
+	if err == nil {
+		return value, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", false, err
+	}
+	data := make([]byte, size)
+	if _, err := rand.Read(data); err != nil {
+		return "", false, err
+	}
+	value = hex.EncodeToString(data)
+	if _, err := s.control.Exec(`INSERT INTO control_meta(key, value) VALUES(?, ?)`, key, value); err != nil {
+		return "", false, err
+	}
+	return value, true, nil
 }
 
 func (s *Store) loadRobots() error {

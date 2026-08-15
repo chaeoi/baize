@@ -9,7 +9,6 @@ on:
       - agent/cmd/**
       - agent/internal/**
       - agent/deploy/**
-      - agent/profiles/**
       - shared/model/**
       - .github/workflows/agent-release.yml
   workflow_dispatch:
@@ -50,7 +49,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/profiles shared/model .github/workflows/agent-release.yml)
+          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy shared/model .github/workflows/agent-release.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
           echo "version=$(date -u -d "$commit_date" +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
@@ -100,7 +99,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/profiles shared/model .github/workflows/agent-release.yml)
+          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy shared/model .github/workflows/agent-release.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
           version="$(date -u -d "$commit_date" +%Y%m%d)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
