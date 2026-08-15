@@ -105,9 +105,11 @@ func (s *Server) frontend(writer http.ResponseWriter, request *http.Request) {
 	cleanPath := strings.TrimPrefix(filepath.Clean("/"+request.URL.Path), "/")
 	target := filepath.Join(s.config.FrontendDir, cleanPath)
 	if info, err := os.Stat(target); err == nil && !info.IsDir() {
+		writer.Header().Set("Cache-Control", "no-store")
 		http.ServeFile(writer, request, target)
 		return
 	}
+	writer.Header().Set("Cache-Control", "no-store")
 	http.ServeFile(writer, request, filepath.Join(s.config.FrontendDir, "index.html"))
 }
 
