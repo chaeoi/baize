@@ -3,11 +3,14 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
+	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -15,22 +18,13 @@ import (
 
 	"baize/agent/internal/config"
 	"baize/shared/model"
+	"gopkg.in/yaml.v3"
 )
 
 const (
-	canRaw        = 1
-	canEffFlag    = uint32(0x80000000)
-	canEffMask    = uint32(0x1fffffff)
-	bmsRequestID  = uint32(0x0400ff80)
-	bmsTotalID    = uint32(0x04028001)
-	bmsStatusID   = uint32(0x04078001)
-	bmsPowerID    = uint32(0x04038001)
-	bmsCellStatID = uint32(0x04048001)
-	bmsTempStatID = uint32(0x04058001)
-	bmsMOSStateID = uint32(0x04068001)
-	bmsPackInfoID = uint32(0x04088001)
-	bmsFaultID    = uint32(0x04098001)
-	bmsSOHID      = uint32(0x040d8001)
+	canRaw     = 1
+	canEffFlag = uint32(0x80000000)
+	canEffMask = uint32(0x1fffffff)
 )
 
 type rawSockaddrCAN struct {
@@ -63,6 +57,10 @@ func NewBMSCollector(cfg config.BMSConfig) *BMSCollector {
 }
 
 func (c *BMSCollector) Run(ctx context.Context) {
+	if c.config.Source == "ros2_topic" {
+		c.readROSLoop(ctx)
+		return
+	}
 	for {
 		if ctx.Err() != nil {
 			return
@@ -79,6 +77,57 @@ func (c *BMSCollector) Run(ctx context.Context) {
 		syscall.Close(fd)
 		if !waitContext(ctx, time.Second) {
 			return
+		}
+	}
+}
+
+type batteryStateMessage struct {
+	Voltage           float64 `yaml:"voltage"`
+	Current           float64 `yaml:"current"`
+	Temperature       float64 `yaml:"temperature"`
+	Percentage        float64 `yaml:"percentage"`
+	PowerSupplyStatus uint8   `yaml:"power_supply_status"`
+}
+
+func (c *BMSCollector) readROSLoop(ctx context.Context) {
+	ticker := time.NewTicker(c.config.QueryInterval.Value())
+	defer ticker.Stop()
+	for {
+		readCtx, cancel := context.WithTimeout(ctx, c.config.Timeout.Value())
+		command, err := rosCommand(c.config.ROSSetup, "ros2 topic echo --once "+shellQuote(c.config.ROSTopic)+" "+shellQuote(c.config.ROSMessageType))
+		if err == nil {
+			var stderr bytes.Buffer
+			cmd := exec.CommandContext(readCtx, "/bin/bash", "-lc", command)
+			cmd.Stderr = &stderr
+			var output []byte
+			output, err = cmd.Output()
+			if err == nil {
+				var message batteryStateMessage
+				err = yaml.Unmarshal(output, &message)
+				if err == nil {
+					percentage := message.Percentage
+					if percentage >= 0 && percentage <= 1 {
+						percentage *= 100
+					}
+					c.mu.Lock()
+					c.metrics.Voltage, c.metrics.Current, c.metrics.Temperature, c.metrics.SOCPercent = message.Voltage, message.Current, message.Temperature, percentage
+					c.metrics.PowerWatts, c.metrics.PowerSupplyStatus = message.Voltage*message.Current, powerStatus(message.PowerSupplyStatus)
+					c.metrics.LastFrameAt, c.metrics.Online, c.lastErr = time.Now().UTC(), true, nil
+					c.mu.Unlock()
+				}
+			}
+			if err != nil && strings.TrimSpace(stderr.String()) != "" {
+				err = errors.New(strings.TrimSpace(stderr.String()))
+			}
+		}
+		cancel()
+		if err != nil {
+			c.setError(fmt.Errorf("BMS ROS2 topic: %w", err))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }
@@ -139,11 +188,18 @@ func (c *BMSCollector) readLoop(ctx context.Context, fd int) {
 }
 
 func (c *BMSCollector) sendQuery(fd int) {
-	frame := make([]byte, 16)
-	binary.LittleEndian.PutUint32(frame[0:4], bmsRequestID|canEffFlag)
-	frame[4] = 8
-	if _, err := syscall.Write(fd, frame); err != nil {
-		c.setError(fmt.Errorf("BMS query write: %w", err))
+	sent := make(map[uint32]struct{})
+	for _, query := range c.config.CANQueries {
+		if _, ok := sent[query.RequestID]; ok {
+			continue
+		}
+		sent[query.RequestID] = struct{}{}
+		frame := make([]byte, 16)
+		binary.LittleEndian.PutUint32(frame[0:4], query.RequestID|canEffFlag)
+		frame[4] = 8
+		if _, err := syscall.Write(fd, frame); err != nil {
+			c.setError(fmt.Errorf("BMS query %s write: %w", query.Name, err))
+		}
 	}
 }
 
@@ -161,76 +217,137 @@ func (c *BMSCollector) consumeFrame(frame []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	updated := false
-	switch id & 0x00ffffff {
-	case bmsTotalID & 0x00ffffff:
-		if len(data) >= 6 {
-			c.metrics.Voltage = float64(binary.BigEndian.Uint16(data[0:2])) * 0.1
-			c.metrics.Current = float64(int32(binary.BigEndian.Uint16(data[2:4]))-30000) * 0.1
-			c.metrics.SOCPercent = float64(binary.BigEndian.Uint16(data[4:6])) * 0.1
-			updated = true
+	for _, query := range c.config.CANQueries {
+		if id&0x00ffffff != query.ResponseID&0x00ffffff {
+			continue
 		}
-	case bmsPowerID & 0x00ffffff:
-		if len(data) >= 7 {
-			c.metrics.PowerWatts = float64(int16(binary.BigEndian.Uint16(data[0:2])))
-			c.metrics.TotalEnergyWh = float64(binary.BigEndian.Uint16(data[2:4]))
-			c.metrics.MOSCelsius = float64(data[4]) - 40
-			c.metrics.BoardCelsius = float64(data[5]) - 40
-			c.metrics.HeaterCelsius = float64(data[6]) - 40
-			c.metrics.Temperature = c.metrics.MOSCelsius
-			updated = true
-		}
-	case bmsCellStatID & 0x00ffffff:
-		if len(data) >= 8 {
-			c.metrics.MaxCellVoltage = float64(binary.BigEndian.Uint16(data[0:2])) / 1000
-			c.metrics.MinCellVoltage = float64(binary.BigEndian.Uint16(data[3:5])) / 1000
-			c.metrics.CellVoltageDelta = float64(binary.BigEndian.Uint16(data[6:8])) / 1000
-			updated = true
-		}
-	case bmsTempStatID & 0x00ffffff:
-		if len(data) >= 5 {
-			c.metrics.MaxCellTemperature = float64(data[0]) - 40
-			c.metrics.MinCellTemperature = float64(data[2]) - 40
-			c.metrics.CellTemperatureDelta = float64(data[4])
-			c.metrics.Temperature = c.metrics.MaxCellTemperature
-			updated = true
-		}
-	case bmsMOSStateID & 0x00ffffff:
-		if len(data) >= 5 {
-			updated = true
-		}
-	case bmsStatusID & 0x00ffffff:
-		if len(data) >= 1 {
-			c.metrics.PowerSupplyStatus = powerStatus(data[0])
-			updated = true
-		}
-	case bmsPackInfoID & 0x00ffffff:
-		if len(data) >= 8 {
-			c.metrics.CellCount = int(data[0])
-			c.metrics.TemperatureCount = int(data[1])
-			c.metrics.RemainingCapacityAh = float64(binary.BigEndian.Uint32(data[2:6])) / 1000
-			c.metrics.CycleCount = int(binary.BigEndian.Uint16(data[6:8]))
-			updated = true
-		}
-	case bmsFaultID & 0x00ffffff:
-		if len(data) >= 8 {
-			c.metrics.Faults = bmsFaults(data)
-			updated = true
-		}
-	case bmsSOHID & 0x00ffffff:
-		if len(data) >= 5 {
-			raw := binary.BigEndian.Uint16(data[3:5])
-			c.metrics.SOHPercent = float64(raw)
-			if raw > 100 {
-				c.metrics.SOHPercent /= 10
+		for _, field := range query.Fields {
+			if c.applyCANField(field, data) {
+				updated = true
 			}
-			updated = true
 		}
+		break
 	}
 	if updated {
 		c.metrics.LastFrameAt = time.Now().UTC()
 		c.metrics.Online = true
 		c.lastErr = nil
 	}
+}
+
+func (c *BMSCollector) applyCANField(field config.CANField, data []byte) bool {
+	if field.Offset < 0 || field.Length <= 0 || field.Offset+field.Length > len(data) {
+		return false
+	}
+	segment := data[field.Offset : field.Offset+field.Length]
+	if field.Name == "faults" && field.Encoding == "bits" {
+		c.metrics.Faults = namedBits(segment, field.BitNames)
+		return true
+	}
+	raw, ok := decodeCANNumber(segment, field.Encoding, field.Endian)
+	if !ok {
+		return false
+	}
+	scale := field.Scale
+	if scale == 0 {
+		scale = 1
+	}
+	value := raw*scale + field.Bias
+	switch field.Name {
+	case "voltage":
+		c.metrics.Voltage = value
+	case "current":
+		c.metrics.Current = value
+	case "soc_percent":
+		c.metrics.SOCPercent = value
+	case "power_supply_status":
+		c.metrics.PowerSupplyStatus = powerStatus(byte(raw))
+	case "power_watts":
+		c.metrics.PowerWatts = value
+	case "total_energy_wh":
+		c.metrics.TotalEnergyWh = value
+	case "mos_celsius":
+		c.metrics.MOSCelsius, c.metrics.Temperature = value, value
+	case "board_celsius":
+		c.metrics.BoardCelsius = value
+	case "heater_celsius":
+		c.metrics.HeaterCelsius = value
+	case "max_cell_voltage":
+		c.metrics.MaxCellVoltage = value
+	case "min_cell_voltage":
+		c.metrics.MinCellVoltage = value
+	case "cell_voltage_delta":
+		c.metrics.CellVoltageDelta = value
+	case "max_cell_temperature":
+		c.metrics.MaxCellTemperature, c.metrics.Temperature = value, value
+	case "min_cell_temperature":
+		c.metrics.MinCellTemperature = value
+	case "cell_temperature_delta":
+		c.metrics.CellTemperatureDelta = value
+	case "cell_count":
+		c.metrics.CellCount = int(value)
+	case "temperature_count":
+		c.metrics.TemperatureCount = int(value)
+	case "remaining_capacity_ah":
+		c.metrics.RemainingCapacityAh = value
+	case "cycle_count":
+		c.metrics.CycleCount = int(value)
+	case "soh_percent":
+		c.metrics.SOHPercent = value
+	default:
+		return false
+	}
+	return true
+}
+
+func decodeCANNumber(data []byte, encoding, endian string) (float64, bool) {
+	if len(data) != 1 && len(data) != 2 && len(data) != 4 && len(data) != 8 {
+		return 0, false
+	}
+	var order binary.ByteOrder = binary.BigEndian
+	if endian == "little" {
+		order = binary.LittleEndian
+	}
+	var unsigned uint64
+	switch len(data) {
+	case 1:
+		unsigned = uint64(data[0])
+	case 2:
+		unsigned = uint64(order.Uint16(data))
+	case 4:
+		unsigned = uint64(order.Uint32(data))
+	case 8:
+		unsigned = order.Uint64(data)
+	}
+	if encoding != "int" {
+		return float64(unsigned), true
+	}
+	bits := uint(len(data) * 8)
+	if unsigned&(uint64(1)<<(bits-1)) == 0 {
+		return float64(unsigned), true
+	}
+	return float64(int64(unsigned | (^uint64(0) << bits))), true
+}
+
+func namedBits(data []byte, names []string) []string {
+	result := make([]string, 0)
+	for byteIndex, value := range data {
+		for bit := 0; bit < 8; bit++ {
+			if value&(1<<bit) == 0 {
+				continue
+			}
+			index := byteIndex*8 + bit
+			name := fmt.Sprintf("fault_bit_%d", index)
+			if index < len(names) {
+				if names[index] == "" || names[index] == "reserved" {
+					continue
+				}
+				name = names[index]
+			}
+			result = append(result, name)
+		}
+	}
+	return result
 }
 
 func (c *BMSCollector) setError(err error) {
@@ -291,26 +408,4 @@ func powerStatus(value byte) string {
 	default:
 		return "unknown"
 	}
-}
-
-func bmsFaults(data []byte) []string {
-	names := [][]string{
-		{"cell_overvoltage_l1", "cell_overvoltage_l2", "cell_undervoltage_l1", "cell_undervoltage_l2", "pack_overvoltage_l1", "pack_overvoltage_l2", "pack_undervoltage_l1", "pack_undervoltage_l2"},
-		{"charge_overtemp_l1", "charge_overtemp_l2", "charge_undertemp_l1", "charge_undertemp_l2", "discharge_overtemp_l1", "discharge_overtemp_l2", "discharge_undertemp_l1", "discharge_undertemp_l2"},
-		{"charge_overcurrent_l1", "charge_overcurrent_l2", "discharge_overcurrent_l1", "discharge_overcurrent_l2", "soc_high_l1", "soc_high_l2", "soc_low_l1", "soc_low_l2"},
-		{"cell_delta_high_l1", "cell_delta_high_l2", "temp_delta_high_l1", "temp_delta_high_l2", "mos_overtemp_l1", "mos_overtemp_l2", "board_overtemp_l1", "board_overtemp_l2"},
-		{"charge_mos_overtemp", "discharge_mos_overtemp", "charge_mos_sensor_fault", "discharge_mos_sensor_fault", "charge_mos_stuck", "discharge_mos_stuck", "charge_mos_open", "discharge_mos_open"},
-		{"afe_fault", "cell_acquisition_offline", "cell_temp_sensor_fault", "eeprom_fault", "rtc_fault", "precharge_failed", "vehicle_communication_fault", "internal_communication_fault"},
-		{"current_module_fault", "pack_voltage_module_fault", "short_circuit", "low_voltage_charge_inhibit", "external_mos_shutdown", "charger_removed", "thermal_runaway", "heater_fault"},
-		{"balance_communication_fault", "balance_condition_not_met", "reserved", "reserved", "reserved", "reserved", "reserved", "reserved"},
-	}
-	var result []string
-	for byteIndex := 0; byteIndex < len(data) && byteIndex < len(names); byteIndex++ {
-		for bit := 0; bit < 8; bit++ {
-			if data[byteIndex]&(1<<bit) != 0 && names[byteIndex][bit] != "reserved" {
-				result = append(result, names[byteIndex][bit])
-			}
-		}
-	}
-	return result
 }

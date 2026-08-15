@@ -35,6 +35,13 @@ var robotStreamUpgrader = websocket.Upgrader{
 	},
 }
 
+var publicRobotStreamUpgrader = websocket.Upgrader{
+	ReadBufferSize:  2048,
+	WriteBufferSize: 8192,
+	// This stream contains the same deliberately redacted data as the public REST API.
+	CheckOrigin: func(*http.Request) bool { return true },
+}
+
 // PublicRobot deliberately contains no UUID, hostname, OS, architecture, or
 // collection configuration. Those fields are available only to an admin stream.
 type PublicRobot struct {
@@ -49,6 +56,7 @@ type PublicRobot struct {
 }
 
 type PublicSummary struct {
+	HasTelemetry     bool           `json:"has_telemetry"`
 	CPUPercent       float64        `json:"cpu_percent"`
 	MemoryPercent    float64        `json:"memory_percent"`
 	DiskPercent      float64        `json:"disk_percent"`
@@ -84,6 +92,7 @@ type robotStreamEvent struct {
 	ServerTime time.Time     `json:"server_time"`
 	Robots     []PublicRobot `json:"robots,omitempty"`
 	Robot      *PublicRobot  `json:"robot,omitempty"`
+	ID         string        `json:"id,omitempty"`
 }
 
 type adminStreamEvent struct {
@@ -91,6 +100,7 @@ type adminStreamEvent struct {
 	ServerTime time.Time     `json:"server_time"`
 	Robots     []RobotRecord `json:"robots,omitempty"`
 	Robot      *RobotRecord  `json:"robot,omitempty"`
+	UUID       string        `json:"uuid,omitempty"`
 }
 
 type streamClient struct {
@@ -150,7 +160,7 @@ func (hub *streamHub) broadcast(message []byte) {
 
 func (s *Server) publicRobot(record RobotRecord) PublicRobot {
 	telemetry := record.Telemetry
-	summary := PublicSummary{DiagnosticCount: len(telemetry.Errors)}
+	summary := PublicSummary{HasTelemetry: !telemetry.CollectedAt.IsZero(), DiagnosticCount: len(telemetry.Errors)}
 	if telemetry.System != nil {
 		summary.CPUPercent = telemetry.System.CPUUsagePercent
 		summary.MemoryPercent = percent(telemetry.System.MemoryUsedBytes, telemetry.System.MemoryTotalBytes)
@@ -239,12 +249,26 @@ func (s *Server) adminSnapshotEvent() []byte {
 	return message
 }
 
+func (s *Server) publicRemovalEvent(record RobotRecord) []byte {
+	message, _ := json.Marshal(robotStreamEvent{Type: "removed", ServerTime: time.Now().UTC(), ID: publicRobotID(s.config.JWTSecret, record.UUID)})
+	return message
+}
+
+func (s *Server) adminRemovalEvent(uuid string) []byte {
+	message, _ := json.Marshal(adminStreamEvent{Type: "removed", ServerTime: time.Now().UTC(), UUID: uuid})
+	return message
+}
+
 func (s *Server) serveRobotStream(writer http.ResponseWriter, request *http.Request, admin bool) {
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer)
 		return
 	}
-	connection, err := robotStreamUpgrader.Upgrade(writer, request, nil)
+	upgrader := robotStreamUpgrader
+	if !admin {
+		upgrader = publicRobotStreamUpgrader
+	}
+	connection, err := upgrader.Upgrade(writer, request, nil)
 	if err != nil {
 		return
 	}

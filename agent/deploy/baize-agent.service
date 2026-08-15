@@ -11,8 +11,11 @@ WorkingDirectory=/opt/baize/agent
 ExecStart=/opt/baize/agent/baize-agent -config /opt/baize/agent/config.yml
 Restart=always
 RestartSec=3
+Environment=ROS_LOG_DIR=/var/log/baize-agent/ros
+LogsDirectory=baize-agent
+LogsDirectoryMode=0750
 
-# Required only for BMS SocketCAN. The motor collector remains ROS2 read-only.
+# Required for the read-only SocketCAN query adapter selected by a robot profile.
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 NoNewPrivileges=true
@@ -20,6 +23,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/opt/baize/agent
+ReadOnlyPaths=/opt/baize/agent/config.yml /opt/baize/agent/profiles
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true

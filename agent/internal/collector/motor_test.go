@@ -1,6 +1,14 @@
 package collector
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"baize/agent/internal/config"
+)
 
 func TestParseJointState(t *testing.T) {
 	data := []byte(`header:
@@ -34,5 +42,29 @@ func TestParseJointStateRejectsMismatchedArrays(t *testing.T) {
 	_, err := parseJointState([]byte("name: [a, b]\nposition: [1]\nvelocity: [1, 2]\neffort: [1, 2]\n"), nil, nil)
 	if err == nil {
 		t.Fatal("expected array mismatch error")
+	}
+}
+
+func TestMotorCollectorReadsSimulatedROS2Topic(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	ros2 := []byte("#!/bin/sh\nprintf '%s\\n' 'name: [hip]' 'position: [1.5]' 'velocity: [2.5]' 'effort: [3.5]'\n")
+	if err := os.WriteFile(filepath.Join(binDir, "ros2"), ros2, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	setup := filepath.Join(root, "setup.bash")
+	if err := os.WriteFile(setup, []byte("export PATH='"+binDir+"':$PATH\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	collector := NewMotorCollector(config.MotorConfig{Enabled: true, Source: "ros2_topic", Topic: "/motor/joint_states", MessageType: "sensor_msgs/msg/JointState", ROSSetup: []string{setup}, ReadTimeout: config.Duration(2 * time.Second)})
+	snapshot, err := collector.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.TopicOnline || len(snapshot.Motors) != 1 || snapshot.Motors[0].VelocityRadPerSec != 2.5 || snapshot.Motors[0].TorqueNm != 3.5 {
+		t.Fatalf("unexpected simulated ROS2 snapshot: %+v", snapshot)
 	}
 }

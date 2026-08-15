@@ -11,9 +11,12 @@ import (
 )
 
 func TestParseSupportedBMSFrames(t *testing.T) {
-	c := NewBMSCollector(config.BMSConfig{Protocol: "yy-bcu14h-mos-24s100a", CANInterface: "can5", Timeout: config.Duration(time.Second)})
+	cfg := config.Default().BMS
+	cfg.Enabled = true
+	cfg.Timeout = config.Duration(time.Second)
+	c := NewBMSCollector(cfg)
 	frame := make([]byte, 16)
-	binary.LittleEndian.PutUint32(frame[0:4], bmsTotalID|canEffFlag)
+	binary.LittleEndian.PutUint32(frame[0:4], uint32(0x04028001)|canEffFlag)
 	frame[4] = 8
 	copy(frame[8:], []byte{0x02, 0x00, 0x75, 0x30, 0x03, 0x52, 0, 0})
 	c.consumeFrame(frame)
@@ -27,9 +30,12 @@ func TestParseSupportedBMSFrames(t *testing.T) {
 }
 
 func TestParseSupportedBMSPackInfo(t *testing.T) {
-	c := NewBMSCollector(config.BMSConfig{Protocol: "yy-bcu14h-mos-24s100a", CANInterface: "can5", Timeout: config.Duration(time.Second)})
+	cfg := config.Default().BMS
+	cfg.Enabled = true
+	cfg.Timeout = config.Duration(time.Second)
+	c := NewBMSCollector(cfg)
 	frame := make([]byte, 16)
-	binary.LittleEndian.PutUint32(frame[0:4], bmsPackInfoID|canEffFlag)
+	binary.LittleEndian.PutUint32(frame[0:4], uint32(0x04088001)|canEffFlag)
 	frame[4] = 8
 	copy(frame[8:], []byte{24, 8, 0x00, 0x01, 0x09, 0xa0, 0x00, 0x7b})
 	c.consumeFrame(frame)
@@ -43,9 +49,12 @@ func TestParseSupportedBMSPackInfo(t *testing.T) {
 }
 
 func TestParseSupportedBMSTemperatureStats(t *testing.T) {
-	c := NewBMSCollector(config.BMSConfig{Protocol: "yy-bcu14h-mos-24s100a", CANInterface: "can5", Timeout: config.Duration(time.Second)})
+	cfg := config.Default().BMS
+	cfg.Enabled = true
+	cfg.Timeout = config.Duration(time.Second)
+	c := NewBMSCollector(cfg)
 	frame := make([]byte, 16)
-	binary.LittleEndian.PutUint32(frame[0:4], bmsTempStatID|canEffFlag)
+	binary.LittleEndian.PutUint32(frame[0:4], uint32(0x04058001)|canEffFlag)
 	frame[4] = 8
 	copy(frame[8:], []byte{72, 3, 65, 7, 7, 0, 0, 0})
 	c.consumeFrame(frame)

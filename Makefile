@@ -13,10 +13,14 @@ build: agent-arm64 agent-amd64 dashboard
 agent-arm64:
 	mkdir -p dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(BUILD_FLAGS) -o dist/baize-agent-linux-arm64 ./agent/cmd/baize-agent
+	mkdir -p dist/agent-profiles
+	cp agent/profiles/*.yml dist/agent-profiles/
 
 agent-amd64:
 	mkdir -p dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(BUILD_FLAGS) -o dist/baize-agent-linux-amd64 ./agent/cmd/baize-agent
+	mkdir -p dist/agent-profiles
+	cp agent/profiles/*.yml dist/agent-profiles/
 
 
 dashboard:
@@ -28,3 +32,4 @@ docker:
 
 clean:
 	rm -f dist/baize-agent-* dist/baize-*
+	rm -rf dist/agent-profiles

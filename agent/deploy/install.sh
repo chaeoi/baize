@@ -126,6 +126,11 @@ else
 	url="https://github.com/$repo/releases/download/$version/$asset"
 fi
 curl --fail --location --silent --show-error "$url" -o "$tmp_dir/$asset"
+profile_url="https://raw.githubusercontent.com/$repo/$version/agent/profiles/$robot_model.yml"
+if [ "$version" = latest ]; then
+	profile_url="https://raw.githubusercontent.com/$repo/main/agent/profiles/$robot_model.yml"
+fi
+curl --fail --location --silent --show-error "$profile_url" -o "$tmp_dir/$robot_model.yml"
 
 yaml_quote() {
 	escaped=$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
@@ -143,6 +148,7 @@ agent:
   uuid: $robot_uuid_yaml
   robot_code: $robot_code_yaml
   robot_model: $robot_model_yaml
+  profile_dir: "/opt/baize/agent/profiles"
   dashboard_url: $dashboard_url_yaml
   token: $token_yaml
 EOF
@@ -161,6 +167,9 @@ WorkingDirectory=/opt/baize/agent
 ExecStart=/opt/baize/agent/baize-agent -config /opt/baize/agent/config.yml
 Restart=always
 RestartSec=3
+Environment=ROS_LOG_DIR=/var/log/baize-agent/ros
+LogsDirectory=baize-agent
+LogsDirectoryMode=0750
 
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
@@ -169,6 +178,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/opt/baize/agent
+ReadOnlyPaths=/opt/baize/agent/config.yml /opt/baize/agent/profiles
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
@@ -178,10 +188,12 @@ RestrictSUIDSGID=true
 WantedBy=multi-user.target
 EOF
 
-"$tmp_dir/$asset" -config "$tmp_dir/config.yml" -check-config
+BAIZE_PROFILE_DIR="$tmp_dir" "$tmp_dir/$asset" -config "$tmp_dir/config.yml" -check-config
 install -d -o ubuntu -g ubuntu -m 0750 "$install_dir"
+install -d -o root -g root -m 0755 "$install_dir/profiles"
 install -o ubuntu -g ubuntu -m 0755 "$tmp_dir/$asset" "$install_dir/baize-agent"
-install -o ubuntu -g ubuntu -m 0600 "$tmp_dir/config.yml" "$install_dir/config.yml"
+install -o root -g ubuntu -m 0640 "$tmp_dir/$robot_model.yml" "$install_dir/profiles/$robot_model.yml"
+install -o root -g ubuntu -m 0640 "$tmp_dir/config.yml" "$install_dir/config.yml"
 install -o root -g root -m 0644 "$tmp_dir/baize-agent.service" /etc/systemd/system/baize-agent.service
 systemctl daemon-reload
 systemctl enable --now baize-agent

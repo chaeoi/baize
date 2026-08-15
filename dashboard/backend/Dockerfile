@@ -1,4 +1,4 @@
-ARG GO_IMAGE=golang:1.24-alpine
+ARG GO_IMAGE=golang:1.26-alpine
 ARG RUNTIME_IMAGE=alpine:3.22
 
 FROM ${GO_IMAGE} AS backend-builder
@@ -7,7 +7,9 @@ ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG ALL_PROXY
 ARG NO_PROXY
+ARG GOPROXY=https://proxy.golang.org,direct
 ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} ALL_PROXY=${ALL_PROXY} NO_PROXY=${NO_PROXY}
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
@@ -18,7 +20,7 @@ COPY shared/model ./shared/model
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/baize ./dashboard/backend/cmd/baize
 
 FROM ${RUNTIME_IMAGE}
-RUN mkdir -p /data /config
+RUN mkdir -p /data/control /data/history /config
 COPY --from=backend-builder /out/baize /opt/baize/dashboard/bin/baize
 COPY dashboard/frontend /opt/baize/dashboard/frontend
 COPY dashboard/config.yml /config/config.example.yml

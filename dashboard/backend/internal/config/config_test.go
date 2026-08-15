@@ -52,11 +52,14 @@ func TestLoadOrCreateGeneratesMissingValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !generated.Created || generated.AgentToken == "" || generated.AdminPassword == "" || generated.JWTSecret == "" {
+	if !generated.Created || generated.AgentToken == "" || !generated.AdminPassword || generated.JWTSecret == "" {
 		t.Fatalf("expected generated values: %+v", generated)
 	}
 	if cfg.Dashboard.AdminUser != "admin" {
 		t.Fatalf("unexpected default admin user: %q", cfg.Dashboard.AdminUser)
+	}
+	if cfg.Dashboard.AdminPassword != DefaultAdminPassword || !cfg.Dashboard.PasswordChangeRequired {
+		t.Fatalf("unexpected bootstrap credentials: password=%q force_change=%v", cfg.Dashboard.AdminPassword, cfg.Dashboard.PasswordChangeRequired)
 	}
 	mode, err := os.Stat(path)
 	if err != nil {
