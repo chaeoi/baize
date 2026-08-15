@@ -28,10 +28,15 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const dashboardPath = window.location.pathname === '/dashboard' || window.location.pathname === '/dashboard/';
 
+function renderIcons() {
+  lucide.createIcons();
+  $$('svg.lucide').forEach((icon) => icon.setAttribute('aria-hidden', 'true'));
+}
+
 document.addEventListener('DOMContentLoaded', boot);
 
 async function boot() {
-  lucide.createIcons();
+  renderIcons();
   bindEvents();
   updateClock();
   window.setInterval(updateClock, 1000);
@@ -119,6 +124,7 @@ function showApp() {
   $('#logout-button').classList.toggle('hidden', !state.authenticated);
   $('#change-password-button').classList.toggle('hidden', !state.authenticated || state.view !== 'settings');
   $('#dashboard-link').classList.toggle('hidden', state.view === 'settings');
+  $('#skip-link').href = state.view === 'settings' ? '#settings-view' : '#public-view';
 }
 
 function enterDashboard() {
@@ -304,7 +310,7 @@ function setConnection(type, label) {
 function render() {
   if (state.view === 'settings') renderSettings();
   else renderPublic();
-  lucide.createIcons();
+  renderIcons();
 }
 
 function renderPublic() {
@@ -333,15 +339,16 @@ function renderPublic() {
 
 function renderRobotList() {
   const query = ($('#robot-search')?.value || '').trim().toLowerCase();
-  const robots = state.robots.filter((robot) => [robot.code, robot.model, robot.remark].some((value) => (value || '').toLowerCase().includes(query)));
+  const robots = state.robots.filter((robot) => [robot.code, robot.remark].some((value) => (value || '').toLowerCase().includes(query)));
   $('#robot-list').innerHTML = robots.map((robot) => {
     const summary = robot.summary || {};
     const battery = summary.battery;
     const online = isPublicOnline(robot);
+    const remark = (robot.remark || '').trim();
     const metric = (label, value, sub, level) => `<div class="robot-card-metric"><span>${label}</span><strong>${value}</strong><div class="meter"><i class="${meterClass(level)}"></i></div><small>${sub}</small></div>`;
     return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="/robot/${encodeURIComponent(robot.id)}">
-      <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong><small>${escapeHTML(robot.remark || robot.model || '未命名设备')}</small></div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
-      <div class="robot-card-meta"><span>${escapeHTML(robot.model || '未知型号')}</span><time>${relativeTime(robot.last_seen)}</time></div>
+      <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong>${remark ? `<small>${escapeHTML(remark)}</small>` : ''}</div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
+      <div class="robot-card-meta"><time>${relativeTime(robot.last_seen)}</time></div>
       <div class="robot-card-metrics">
         ${metric('CPU', summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', `负载 ${fixed(summary.load_1)}`, summary.cpu_percent)}
         ${metric('内存', summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', '系统内存', summary.memory_percent)}
@@ -362,7 +369,6 @@ function renderPublicDetail(robot) {
   const summary = robot.summary || {};
   const battery = summary.battery;
   $('#robot-code').textContent = robot.code || '-';
-  $('#robot-model').textContent = robot.model || '未知型号';
   $('#robot-remark').textContent = robot.remark || '未设置备注';
   const online = isPublicOnline(robot);
   $('#robot-status').textContent = online ? '在线运行' : '离线';
@@ -457,7 +463,7 @@ async function loadPublicHistory(robot) {
   state.publicHistoryLoading = true;
   state.publicHistoryDrawKey = '';
   $('#public-chart-grid').innerHTML = '';
-  $('#public-history-empty').textContent = '正在读取历史采样';
+  $('#public-history-empty').textContent = '正在读取历史采样…';
   $('#public-history-empty').classList.remove('hidden');
   try {
     const hours = Number($('#public-history-range').value) || 24;
@@ -579,7 +585,7 @@ function renderReleases() {
   if (!$('#release-list')) return;
   $('#release-list').innerHTML = state.releases.map((release) => `<div class="release-row"><strong>${escapeHTML(release.version)}</strong><span>${escapeHTML(release.os)}/${escapeHTML(release.arch)}</span><code>${escapeHTML(release.sha256.slice(0, 12))} · ${bytes(release.size)}</code><button class="icon-button" data-release="${escapeHTML(release.id)}" type="button" title="删除发布" aria-label="删除发布"><i data-lucide="trash-2"></i></button></div>`).join('') || '<div class="empty-line">暂无发布文件</div>';
   $$('#release-list [data-release]').forEach((button) => button.addEventListener('click', () => deleteRelease(button.dataset.release)));
-  lucide.createIcons();
+  renderIcons();
 }
 
 async function deleteRelease(id) {
@@ -693,9 +699,8 @@ function drawPublicHistory(points) {
   const empty = $('#public-history-empty');
   empty.classList.toggle('hidden', specs.length > 0);
   if (!specs.length) {
-    empty.textContent = points.length ? '当前维度暂无足够的历史采样' : '等待形成历史采样';
+    empty.textContent = points.length ? '当前维度暂无足够的历史采样' : '等待形成历史采样…';
     grid.innerHTML = '';
-    $('#public-history-meta').textContent = points.length ? `已有 ${points.length} 个采样点` : '暂无历史采样';
     state.publicHistoryDrawKey = drawKey;
     return;
   }
@@ -705,8 +710,6 @@ function drawPublicHistory(points) {
     return `<article class="chart-card"><header><div><span>${escapeHTML(spec.group)}</span><h3>${escapeHTML(spec.label)}</h3></div><strong>${escapeHTML(formatChartValue(latest, spec))}</strong></header><div class="chart-canvas"><canvas data-chart-index="${index}"></canvas></div><footer><span>${escapeHTML(formatChartTime(values[0]?.at))}</span><span>${escapeHTML(formatChartTime(values.at(-1)?.at))}</span></footer></article>`;
   }).join('');
   $$('#public-chart-grid canvas').forEach((canvas) => drawSingleMetricChart(canvas, points, specs[Number(canvas.dataset.chartIndex)]));
-  const latestAt = points.at(-1)?.at;
-  $('#public-history-meta').textContent = `${points.length} 个采样点 · ${latestAt ? `${relativeTime(latestAt)}更新` : '暂无更新时间'}`;
   state.publicHistoryDrawKey = drawKey;
 }
 
