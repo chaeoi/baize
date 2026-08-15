@@ -103,7 +103,7 @@ jobs:
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
           version="$(date -u -d "$commit_date" +%Y%m%d)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          sha256sum dist/baize-agent-linux-* > dist/SHA256SUMS
+          (cd dist && sha256sum baize-agent-linux-* > SHA256SUMS)
 
       - name: 移动日期标签
         env:
