@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,24 @@ import (
 	"baize/shared/model"
 	"github.com/gorilla/websocket"
 )
+
+func TestFrontendDisablesCachingForAssetsAndRoutes(t *testing.T) {
+	frontend := t.TempDir()
+	if err := os.WriteFile(frontend+"/index.html", []byte("index"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(frontend+"/app.js", []byte("app"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(ServerConfig{FrontendDir: frontend, JWTSecret: "jwt-secret-long-enough-for-tests-123456"}, nil)
+	for _, path := range []string{"/app.js", "/robot/public-id"} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("frontend %s status=%d cache=%q", path, response.Code, response.Header().Get("Cache-Control"))
+		}
+	}
+}
 
 func TestSessionTokenUsesJWTSecret(t *testing.T) {
 	server := &Server{config: ServerConfig{JWTSecret: "jwt-secret-long-enough-for-tests-123456"}}
