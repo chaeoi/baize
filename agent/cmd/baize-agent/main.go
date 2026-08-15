@@ -23,24 +23,17 @@ import (
 var version = "dev"
 
 func main() {
-	uuid := flag.String("uuid", os.Getenv("BAIZE_AGENT_UUID"), "permanent robot UUID")
-	robotCode := flag.String("robot-code", os.Getenv("BAIZE_ROBOT_CODE"), "robot code")
-	robotModel := flag.String("robot-model", os.Getenv("BAIZE_ROBOT_MODEL"), "robot model compiled into this Agent")
-	dashboardURL := flag.String("dashboard-url", os.Getenv("BAIZE_DASHBOARD_URL"), "Dashboard base URL")
-	token := flag.String("token", os.Getenv("BAIZE_AGENT_TOKEN"), "Dashboard Agent token")
+	configPath := flag.String("config", "/opt/baize/agent/config.yml", "Agent configuration file")
 	showVersion := flag.Bool("version", false, "print version and exit")
-	checkConfig := flag.Bool("check-config", false, "validate built-in model and installation identity, then exit")
+	checkConfig := flag.Bool("check-config", false, "validate configuration and built-in robot model, then exit")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
 		return
 	}
-	cfg, err := config.Build(config.AgentConfig{
-		UUID: *uuid, RobotCode: *robotCode, RobotModel: *robotModel,
-		DashboardURL: *dashboardURL, Token: *token,
-	})
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		slog.Error("build runtime configuration", "error", err)
+		slog.Error("load configuration", "error", err, "path", *configPath)
 		os.Exit(2)
 	}
 	if *checkConfig {

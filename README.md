@@ -5,20 +5,22 @@
 备注、管理员账号、发布版本和 Dashboard 密钥；`history` 可按保留策略丢弃。
 
 型号能力随 GitHub Release 编入二进制：Agent 只读取 ROS2 状态话题，BMS CAN
-查询由独立的 [`batcan`](https://github.com/chaeoi/batcan) 服务负责。
-项目不再下载外置型号 profile，也不使用 YAML 配置文件。
+查询由独立的 [`batcan`](https://github.com/chaeoi/batcan) 服务负责。部署仍使用
+`config.yml` 管理监听地址、身份和通用采集策略，但不允许通过 YAML 修改型号 profile。
 
 ## Dashboard
 
-Dashboard 镜像自带运行配置，首次启动时会在 `/data/control/control.db` 中生成
+Dashboard 镜像自带配置样例。首次启动时会在 `/data/control/control.db` 中生成
 Agent token 和 JWT 密钥。默认管理员是 `admin`，默认密码 `Baize@Admin1`，首次
-登录后强制修改。
+登录后强制修改。生产配置应由 root 保存为 `0600`。
 
 ```bash
 sudo install -d -m 0750 /opt/baize/dashboard/data
+sudo install -m 0600 dashboard/config.yml.example /opt/baize/dashboard/config.yml
 docker pull chaeoi/baize:latest
 docker run -d --name baize --restart unless-stopped \
-  -p 8080:8080 \
+  --network host \
+  -v /opt/baize/dashboard/config.yml:/opt/baize/dashboard/config.yml:ro \
   -v /opt/baize/dashboard/data:/data \
   chaeoi/baize:latest
 ```
@@ -30,9 +32,9 @@ curl --cookie 'baize_session=<session-cookie>' \
   http://<dashboard-host>:8080/api/v1/admin/agent-token
 ```
 
-默认容器监听 `:8080`。部署环境确有必要时可用环境变量覆盖路径、监听地址和
-Cookie TLS 标志：`BAIZE_LISTEN`、`BAIZE_DATA_DIR`、`BAIZE_HISTORY_DATA_DIR`、
-`BAIZE_FRONTEND_DIR`、`BAIZE_COOKIE_SECURE`。它们不保存密码或 token。
+修改 `dashboard.listen` 即可改变监听端口。例如 Cloudflare Tunnel 的本地 service
+为 `http://127.0.0.1:5037` 时，配置 `listen: "127.0.0.1:5037"`。Agent token 与
+JWT 密钥不写入 YAML，而是保存在 control DB。
 
 公开数据接口为 `GET /api/v1/robots`、`GET /api/v1/robots/{public_id}/history`
 及 `wss://<host>/api/v1/ws/robots`。接口允许跨域只读嵌入，并且不暴露 UUID、
@@ -41,8 +43,9 @@ Cookie TLS 标志：`BAIZE_LISTEN`、`BAIZE_DATA_DIR`、`BAIZE_HISTORY_DATA_DIR`
 ## Agent
 
 GitHub Actions 构建 Linux AMD64/ARM64 静态 Agent；机器人只下载经 SHA-256 校验
-的 Release 二进制。安装时会把每台机器人不可避免的身份信息写入 root-only 的
-systemd unit 环境，二进制本身不依赖 `config.yml` 或外置型号文件。
+的 Release 二进制。安装器会生成 root-only 的 `/opt/baize/agent/config.yml`，其中
+包含机器人身份、Dashboard 凭据和 `robot_model`。topic、电机清单、电池 ROS2
+消息格式均由二进制内置 profile 决定，配置文件不能覆盖。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/install.sh | \

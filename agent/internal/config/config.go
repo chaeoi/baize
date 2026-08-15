@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Duration time.Duration
@@ -21,6 +24,18 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 		return errors.New("duration must be a string such as \"2s\" or \"5m\"")
 	}
 	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!str" {
+		return errors.New("duration must be a string such as \"2s\" or \"5m\"")
+	}
+	parsed, err := time.ParseDuration(value.Value)
 	if err != nil {
 		return err
 	}
@@ -105,6 +120,15 @@ type UpdateConfig struct {
 	CheckInterval Duration `json:"check_interval" yaml:"check_interval"`
 }
 
+// fileConfig deliberately excludes motor and BMS sections. Robot capability is
+// selected by agent.robot_model and compiled into the Agent release.
+type fileConfig struct {
+	Agent  AgentConfig   `yaml:"agent"`
+	System *SystemConfig `yaml:"system"`
+	GPU    *GPUConfig    `yaml:"gpu"`
+	Update *UpdateConfig `yaml:"update"`
+}
+
 func Default() Config {
 	return Config{
 		Agent: AgentConfig{
@@ -153,17 +177,63 @@ var (
 
 func Build(agent AgentConfig) (Config, error) {
 	cfg := Default()
-	if agent.ReportInterval.Value() == 0 {
-		agent.ReportInterval = cfg.Agent.ReportInterval
+	cfg.Agent = agent
+	return build(cfg)
+}
+
+// Load reads deployment identity and generic collection settings. It rejects
+// YAML fields for model-specific collectors so they cannot override a built-in
+// robot profile.
+func Load(path string) (Config, error) {
+	input, err := os.Open(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("open agent config: %w", err)
 	}
-	if agent.HTTPTimeout.Value() == 0 {
-		agent.HTTPTimeout = cfg.Agent.HTTPTimeout
+	defer input.Close()
+	var file fileConfig
+	decoder := yaml.NewDecoder(input)
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil {
+		return Config{}, fmt.Errorf("parse agent config: %w", err)
 	}
-	profile, err := profileForModel(agent.RobotModel)
+	cfg := Default()
+	cfg.Agent = file.Agent
+	if file.System != nil {
+		cfg.System = *file.System
+	}
+	if file.GPU != nil {
+		cfg.GPU = *file.GPU
+	}
+	if file.Update != nil {
+		cfg.Update = *file.Update
+	}
+	return build(cfg)
+}
+
+func build(cfg Config) (Config, error) {
+	defaults := Default()
+	if cfg.Agent.ReportInterval.Value() == 0 {
+		cfg.Agent.ReportInterval = defaults.Agent.ReportInterval
+	}
+	if cfg.Agent.HTTPTimeout.Value() == 0 {
+		cfg.Agent.HTTPTimeout = defaults.Agent.HTTPTimeout
+	}
+	if cfg.System.DiskPaths == nil {
+		cfg.System.DiskPaths = defaults.System.DiskPaths
+	}
+	if cfg.GPU.Command == "" {
+		cfg.GPU.Command = defaults.GPU.Command
+	}
+	if cfg.GPU.Timeout.Value() == 0 {
+		cfg.GPU.Timeout = defaults.GPU.Timeout
+	}
+	if cfg.Update.CheckInterval.Value() == 0 {
+		cfg.Update.CheckInterval = defaults.Update.CheckInterval
+	}
+	profile, err := profileForModel(cfg.Agent.RobotModel)
 	if err != nil {
 		return cfg, err
 	}
-	cfg.Agent = agent
 	cfg.Motor = profile.Motor
 	cfg.BMS = profile.BMS
 	if err := cfg.Validate(); err != nil {

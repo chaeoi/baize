@@ -1,0 +1,22 @@
+agent:
+  uuid: "replace-with-robot-uuid"
+  robot_code: "M99"
+  robot_model: "2m_v0.1.2"
+  dashboard_url: "https://baize.example.com"
+  token: "replace-with-dashboard-agent-token"
+  report_interval: "2s"
+  http_timeout: "10s"
+
+system:
+  enabled: true
+  disk_paths: ["/"]
+
+gpu:
+  enabled: true
+  command: "nvidia-smi"
+  timeout: "3s"
+
+update:
+  enabled: true
+  automatic: true
+  check_interval: "1m"
