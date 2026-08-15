@@ -1,5 +1,8 @@
 # 电机采集说明
 
-Agent 只读取已经存在的 ROS2 关节状态消息，并上报位置、速度和估算力矩等公开遥测字段。
+电机采集由 `agent/profiles/<robot_model>.yml` 选择 transport：
 
-Agent 不连接电机 CAN，不发送电机控制、查询或配置指令。电机型号、接口、关节映射和在线状态由机器人主控及部署配置决定；需要更完整的电机诊断时，应在主控侧提供额外的只读状态消息。
+- `ros2_topic`：只读取已经存在的 `sensor_msgs/msg/JointState`，映射位置、速度和 effort/转矩。
+- `can_query`：只发送 profile 明确声明的只读查询帧，按响应 ID、字节偏移、端序和缩放映射位置、速度和转矩。
+
+两种 transport 都输出相同的 `MotorState` 语义模型，因此 Dashboard 和公开 API 不关心底层设备 SDK。profile 不能执行任意 shell 命令，也不能发送电机控制或配置帧；需要新增型号时只新增并审核 profile 文件。

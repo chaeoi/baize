@@ -38,17 +38,22 @@ func main() {
 		fmt.Println("config is valid")
 		return
 	}
-	if generated.AgentToken != "" || generated.AdminPassword != "" {
-		slog.Warn("dashboard config values generated", "path", *configPath, "admin_user", cfg.Dashboard.AdminUser, "admin_password", generated.AdminPassword, "agent_token", generated.AgentToken, "jwt_secret_generated", generated.JWTSecret != "")
+	if generated.AgentToken != "" || generated.AdminPassword {
+		slog.Warn("dashboard bootstrap config created", "path", *configPath, "admin_user", cfg.Dashboard.AdminUser, "default_password_enabled", generated.AdminPassword, "agent_token_generated", generated.AgentToken != "", "jwt_secret_generated", generated.JWTSecret != "")
 	}
-	store, err := dashboard.NewStore(cfg.Dashboard.DataDir)
+	store, err := dashboard.NewStore(cfg.Dashboard.DataDir, cfg.Dashboard.HistoryDataDir, dashboard.StoreOptions{
+		AdminUser: cfg.Dashboard.AdminUser, BootstrapPassword: cfg.Dashboard.AdminPassword,
+		RequirePasswordChange: cfg.Dashboard.PasswordChangeRequired,
+		HistoryRetention:      cfg.Dashboard.HistoryRetention.Value(), HistorySampleInterval: cfg.Dashboard.HistorySampleInterval.Value(),
+	})
 	if err != nil {
 		slog.Error("open dashboard store", "error", err)
 		os.Exit(1)
 	}
+	defer store.Close()
 	handler := dashboard.NewServer(dashboard.ServerConfig{
-		AgentToken: cfg.Dashboard.AgentToken, AdminPassword: cfg.Dashboard.AdminPassword,
-		AdminUser: cfg.Dashboard.AdminUser, JWTSecret: cfg.Dashboard.JWTSecret, FrontendDir: cfg.Dashboard.FrontendDir,
+		AgentToken: cfg.Dashboard.AgentToken, AdminUser: cfg.Dashboard.AdminUser,
+		JWTSecret: cfg.Dashboard.JWTSecret, FrontendDir: cfg.Dashboard.FrontendDir, CookieSecure: cfg.Dashboard.CookieSecure,
 	}, store)
 	server := &http.Server{Addr: cfg.Dashboard.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

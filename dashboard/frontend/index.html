@@ -21,7 +21,30 @@
         <button class="button primary full" type="submit"><i data-lucide="log-in"></i><span>登录控制台</span></button>
         <div id="login-error" class="form-error" role="alert"></div>
       </form>
+      <p class="bootstrap-note">首次部署默认密码 <code>Baize@Admin1</code>，登录后必须修改。</p>
       <a class="back-link" href="/"><i data-lucide="arrow-left"></i><span>返回展示页</span></a>
+    </div>
+  </div>
+
+  <div id="password-change-gate" class="login-gate hidden">
+    <div class="login-panel password-panel">
+      <div class="brand-lockup login-brand"><span class="brand-mark"><i data-lucide="shield-check"></i></span><div><strong>保护控制台</strong><small>Administrator security</small></div></div>
+      <span class="eyebrow">安全设置</span>
+      <h1>更新管理密码</h1>
+      <p id="password-change-copy" class="login-copy">继续前必须替换初始密码。</p>
+      <form id="password-change-form" class="login-form">
+        <input name="username" type="text" autocomplete="username" hidden>
+        <label for="current-password">当前密码</label>
+        <input id="current-password" type="password" autocomplete="current-password" required>
+        <label for="new-password">新密码</label>
+        <input id="new-password" type="password" autocomplete="new-password" minlength="12" required>
+        <label for="confirm-password">确认新密码</label>
+        <input id="confirm-password" type="password" autocomplete="new-password" minlength="12" required>
+        <button class="button primary full" type="submit"><i data-lucide="shield-check"></i><span>保存并进入控制台</span></button>
+        <button id="cancel-password-change" class="button subtle full hidden" type="button">取消</button>
+        <div id="password-change-error" class="form-error" role="alert"></div>
+      </form>
+      <div class="password-rules"><span>至少 12 位</span><span>包含大小写字母</span><span>包含数字和符号</span></div>
     </div>
   </div>
 
@@ -31,6 +54,7 @@
       <div class="topbar-actions">
         <span id="connection-state" class="connection-state"><span class="connection-dot"></span><span>WS 连接中</span></span>
         <button id="refresh-button" class="icon-button" type="button" title="重新连接实时通道" aria-label="重新连接实时通道"><i data-lucide="refresh-cw"></i></button>
+        <button id="change-password-button" class="icon-button hidden" type="button" title="修改管理密码" aria-label="修改管理密码"><i data-lucide="key-round"></i></button>
         <button id="logout-button" class="icon-button hidden" type="button" title="退出控制台" aria-label="退出控制台"><i data-lucide="log-out"></i></button>
       </div>
     </header>
@@ -82,6 +106,23 @@
             <article class="signal-panel"><div class="section-head"><h3>热状态</h3><i data-lucide="thermometer"></i></div><div id="thermal-summary" class="thermal-summary"></div></article>
             <article class="signal-panel"><div class="section-head"><h3>运行组件</h3><i data-lucide="workflow"></i></div><dl id="component-facts" class="fact-list"></dl></article>
           </section>
+
+          <section class="public-history-section">
+            <div class="section-head public-history-head">
+              <div><span class="eyebrow">Telemetry history</span><h3>运行趋势</h3></div>
+              <select id="public-history-range" class="compact-select" aria-label="公开历史范围"><option value="6">6 小时</option><option value="24" selected>24 小时</option><option value="168">7 天</option></select>
+            </div>
+            <div class="public-history-toolbar">
+              <div class="segmented-control" role="group" aria-label="趋势维度">
+                <button type="button" class="active" data-public-mode="host">主机性能</button>
+                <button type="button" data-public-mode="motors">全部电机</button>
+                <button type="button" data-public-mode="single">单个电机</button>
+              </div>
+              <select id="public-motor-select" class="compact-select hidden" aria-label="选择电机"></select>
+              <select id="public-metric-select" class="compact-select hidden" aria-label="选择电机指标"><option value="torque_nm">转矩</option><option value="velocity_rad_per_sec">速度</option><option value="position_rad">位置</option></select>
+            </div>
+            <div class="history-body public-history-body"><div id="public-chart-legend" class="chart-legend"></div><div class="chart-frame"><canvas id="public-history-chart"></canvas><div id="public-history-empty" class="chart-empty">等待形成历史采样</div></div><div id="public-history-meta" class="history-meta">--</div></div>
+          </section>
         </section>
       </section>
     </main>
@@ -93,10 +134,14 @@
         <section class="settings-workspace">
           <article id="settings-robot-empty" class="settings-section settings-empty"><i data-lucide="mouse-pointer-click"></i><strong>选择一台机器人</strong><span>身份与采集配置仅在控制台显示</span></article>
           <article id="settings-robot-panel" class="settings-section hidden">
-            <div class="settings-robot-title"><div><span class="eyebrow">Robot identity</span><h2 id="settings-robot-code">-</h2><span id="settings-robot-status" class="status-label">离线</span></div><button id="remark-button" class="icon-button" type="button" title="编辑备注" aria-label="编辑备注"><i data-lucide="pencil"></i></button></div>
+            <div class="settings-robot-title"><div><span class="eyebrow">Robot identity</span><h2 id="settings-robot-code">-</h2><span id="settings-robot-status" class="status-label">离线</span></div><div class="title-actions"><button id="remark-button" class="icon-button" type="button" title="编辑备注" aria-label="编辑备注"><i data-lucide="pencil"></i></button><button id="delete-robot-button" class="icon-button danger-icon" type="button" title="删除设备" aria-label="删除设备"><i data-lucide="trash-2"></i></button></div></div>
             <div class="settings-block"><h3>身份信息</h3><dl id="settings-identity-facts" class="fact-list"></dl></div>
             <div class="settings-block"><h3>采集配置</h3><dl id="settings-config-facts" class="fact-list"></dl></div>
             <div class="settings-actions"><button id="update-button" class="button primary" type="button"><i data-lucide="download"></i><span>指定 Agent 版本</span></button></div>
+          </article>
+          <article id="history-panel" class="settings-section history-section hidden">
+            <div class="section-head"><div><span class="eyebrow">Telemetry history</span><h2>运行趋势</h2></div><select id="history-range" class="compact-select" aria-label="历史范围"><option value="6">最近 6 小时</option><option value="24" selected>最近 24 小时</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option></select></div>
+            <div class="history-body"><div class="chart-legend"><span><i class="legend-cpu"></i>CPU</span><span><i class="legend-memory"></i>内存</span><span><i class="legend-battery"></i>电池</span></div><div class="chart-frame"><canvas id="history-chart"></canvas><div id="history-empty" class="chart-empty">等待形成历史采样</div></div><div id="history-meta" class="history-meta">--</div></div>
           </article>
           <article class="settings-section settings-releases"><div class="section-head"><div><span class="eyebrow">Release channel</span><h2>Agent 发布</h2></div><i data-lucide="package"></i></div><div class="settings-section-body"><form id="release-form" class="upload-form"><label>版本<input name="version" placeholder="20260814" required></label><label>系统<select name="os"><option value="linux">linux</option></select></label><label>架构<select name="arch"><option value="arm64">arm64</option><option value="amd64">amd64</option></select></label><label class="file-label">二进制<input name="binary" type="file" required></label><button class="button primary" type="submit"><i data-lucide="upload"></i><span>上传</span></button></form><div id="release-list" class="release-list"></div></div></article>
         </section>
@@ -106,6 +151,7 @@
 
   <dialog id="remark-dialog"><form id="remark-form" class="dialog-form"><div class="dialog-heading"><div><span class="eyebrow">Robot remark</span><h2 id="remark-dialog-title">编辑备注</h2></div><button class="icon-button dialog-close" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><label for="remark-input">备注</label><textarea id="remark-input" maxlength="200" rows="4"></textarea><div class="dialog-actions"><button class="button subtle dialog-close" type="button">取消</button><button class="button primary" type="submit"><i data-lucide="save"></i><span>保存</span></button></div></form></dialog>
   <dialog id="update-dialog"><form id="update-form" class="dialog-form"><div class="dialog-heading"><div><span class="eyebrow">Agent update</span><h2 id="update-dialog-title">指定版本</h2></div><button class="icon-button dialog-close" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><label for="update-version">版本</label><select id="update-version" required></select><div class="dialog-actions"><button id="clear-update-button" class="button danger" type="button"><i data-lucide="rotate-ccw"></i><span>清除指定</span></button><span class="action-spacer"></span><button class="button subtle dialog-close" type="button">取消</button><button class="button primary" type="submit"><i data-lucide="download"></i><span>下发更新</span></button></div></form></dialog>
+  <dialog id="delete-robot-dialog"><form id="delete-robot-form" class="dialog-form"><div class="dialog-heading"><div><span class="eyebrow">Remove device</span><h2 id="delete-robot-title">删除设备</h2></div><button class="icon-button dialog-close" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><p class="dialog-copy">设备目录、备注、目标版本和该设备的历史采样将被删除。Agent 再次上报时会作为新接入设备出现。</p><div class="dialog-actions"><button class="button subtle dialog-close" type="button">取消</button><button class="button danger solid-danger" type="submit"><i data-lucide="trash-2"></i><span>确认删除</span></button></div></form></dialog>
   <div id="toast" class="toast" role="status"></div>
   <script src="/vendor/lucide.min.js"></script>
   <script src="/app.js" defer></script>

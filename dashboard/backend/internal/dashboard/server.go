@@ -14,15 +14,18 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"baize/shared/model"
 )
@@ -40,32 +43,40 @@ var (
 )
 
 type ServerConfig struct {
-	AgentToken    string
-	AdminUser     string
-	AdminPassword string
-	JWTSecret     string
-	FrontendDir   string
+	AgentToken   string
+	AdminUser    string
+	JWTSecret    string
+	FrontendDir  string
+	CookieSecure bool
 }
 
 type Server struct {
-	config       ServerConfig
-	store        *Store
-	sessions     map[string]time.Time
-	publicStream *streamHub
-	adminStream  *streamHub
-	mu           sync.Mutex
-	handler      http.Handler
+	config        ServerConfig
+	store         *Store
+	sessions      map[string]time.Time
+	loginAttempts map[string]loginAttempt
+	publicStream  *streamHub
+	adminStream   *streamHub
+	mu            sync.Mutex
+	handler       http.Handler
+}
+
+type loginAttempt struct {
+	Failures int
+	Last     time.Time
 }
 
 func NewServer(cfg ServerConfig, store *Store) *Server {
 	server := &Server{
-		config: cfg, store: store, sessions: make(map[string]time.Time),
+		config: cfg, store: store, sessions: make(map[string]time.Time), loginAttempts: make(map[string]loginAttempt),
 		publicStream: newStreamHub(), adminStream: newStreamHub(),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.health)
 	mux.HandleFunc("/api/v1/session", server.session)
+	mux.HandleFunc("/api/v1/admin/password", server.requireSession(server.changePassword))
 	mux.HandleFunc("/api/v1/robots", server.robots)
+	mux.HandleFunc("/api/v1/robots/", server.publicRobotAction)
 	mux.HandleFunc("/api/v1/ws/robots", server.publicRobotStream)
 	mux.HandleFunc("/api/v1/telemetry", server.requireAgent(server.telemetry))
 	mux.HandleFunc("/api/v1/update/check", server.requireAgent(server.updateCheck))
@@ -110,7 +121,12 @@ func (s *Server) health(writer http.ResponseWriter, _ *http.Request) {
 func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
-		writeJSON(writer, http.StatusOK, map[string]any{"authenticated": s.validSession(request), "username": s.config.AdminUser})
+		authenticated := s.validSession(request)
+		passwordChangeRequired := false
+		if authenticated {
+			passwordChangeRequired, _ = s.store.PasswordChangeRequired(s.config.AdminUser)
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"authenticated": authenticated, "username": s.config.AdminUser, "password_change_required": passwordChangeRequired})
 	case http.MethodPost:
 		var body struct {
 			Username string `json:"username"`
@@ -119,27 +135,27 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 		if err := decodeJSON(writer, request, &body, 4096); err != nil {
 			return
 		}
-		if !secureEqual(body.Username, s.config.AdminUser) || !secureEqual(body.Password, s.config.AdminPassword) {
-			time.Sleep(300 * time.Millisecond)
+		if !s.loginAllowed(request) {
+			writeError(writer, http.StatusTooManyRequests, "too many login attempts; try again later")
+			return
+		}
+		valid, passwordChangeRequired, err := s.store.AuthenticateAdmin(body.Username, body.Password)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, "authenticate administrator")
+			return
+		}
+		if !secureEqual(body.Username, s.config.AdminUser) || !valid {
+			s.recordLoginFailure(request)
+			time.Sleep(250 * time.Millisecond)
 			writeError(writer, http.StatusUnauthorized, "invalid password")
 			return
 		}
-		sessionID, err := randomToken()
-		if err != nil {
+		s.resetLoginFailures(request)
+		if err := s.startSession(writer, request); err != nil {
 			writeError(writer, http.StatusInternalServerError, "create session")
 			return
 		}
-		expires := time.Now().Add(12 * time.Hour)
-		token, err := s.createSessionToken(sessionID, expires)
-		if err != nil {
-			writeError(writer, http.StatusInternalServerError, "create session")
-			return
-		}
-		s.mu.Lock()
-		s.sessions[sessionID] = expires
-		s.mu.Unlock()
-		http.SetCookie(writer, &http.Cookie{Name: "baize_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Expires: expires})
-		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true})
+		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true, "password_change_required": passwordChangeRequired})
 	case http.MethodDelete:
 		if cookie, err := request.Cookie("baize_session"); err == nil {
 			if claims, ok := s.parseSessionToken(cookie.Value); ok {
@@ -148,11 +164,66 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 				s.mu.Unlock()
 			}
 		}
-		http.SetCookie(writer, &http.Cookie{Name: "baize_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		http.SetCookie(writer, &http.Cookie{Name: "baize_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secureCookie(request), SameSite: http.SameSiteStrictMode})
 		writer.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(writer)
 	}
+}
+
+func (s *Server) changePassword(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer)
+		return
+	}
+	var body struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := decodeJSON(writer, request, &body, 4096); err != nil {
+		return
+	}
+	if err := validateAdminPassword(body.NewPassword); err != nil {
+		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	if secureEqual(body.CurrentPassword, body.NewPassword) {
+		writeError(writer, http.StatusBadRequest, "new password must be different from the current password")
+		return
+	}
+	if err := s.store.ChangeAdminPassword(s.config.AdminUser, body.CurrentPassword, body.NewPassword); err != nil {
+		if err.Error() == "current password is incorrect" {
+			writeError(writer, http.StatusUnauthorized, err.Error())
+			return
+		}
+		writeError(writer, http.StatusInternalServerError, "change administrator password")
+		return
+	}
+	s.mu.Lock()
+	s.sessions = make(map[string]time.Time)
+	s.mu.Unlock()
+	if err := s.startSession(writer, request); err != nil {
+		writeError(writer, http.StatusInternalServerError, "renew session")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true, "password_change_required": false})
+}
+
+func (s *Server) startSession(writer http.ResponseWriter, request *http.Request) error {
+	sessionID, err := randomToken()
+	if err != nil {
+		return err
+	}
+	expires := time.Now().Add(12 * time.Hour)
+	token, err := s.createSessionToken(sessionID, expires)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.sessions[sessionID] = expires
+	s.mu.Unlock()
+	http.SetCookie(writer, &http.Cookie{Name: "baize_session", Value: token, Path: "/", HttpOnly: true, Secure: s.secureCookie(request), SameSite: http.SameSiteStrictMode, Expires: expires})
+	return nil
 }
 
 func (s *Server) telemetry(writer http.ResponseWriter, request *http.Request) {
@@ -168,7 +239,10 @@ func (s *Server) telemetry(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, "invalid telemetry identity or schema")
 		return
 	}
-	s.store.PutTelemetry(telemetry)
+	if err := s.store.PutTelemetry(telemetry); err != nil {
+		writeError(writer, http.StatusInternalServerError, "store telemetry")
+		return
+	}
 	if robot, ok := s.store.Robot(telemetry.Robot.UUID); ok {
 		s.publicStream.broadcast(s.publicRobotEvent(robot))
 		s.adminStream.broadcast(s.adminRobotEvent(robot))
@@ -208,7 +282,7 @@ func (s *Server) updateFile(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(request.URL.Path, "/api/v1/update/files/")
-	if strings.Contains(id, "/") || id == "" {
+	if !safeReleaseID(id) {
 		writeError(writer, http.StatusBadRequest, "invalid release id")
 		return
 	}
@@ -224,11 +298,55 @@ func (s *Server) updateFile(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) robots(writer http.ResponseWriter, request *http.Request) {
+	allowPublicAPI(writer)
+	if request.Method == http.MethodOptions {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if request.Method != http.MethodGet {
 		methodNotAllowed(writer)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"robots": s.publicRobotSnapshot(), "server_time": time.Now().UTC()})
+}
+
+func (s *Server) publicRobotAction(writer http.ResponseWriter, request *http.Request) {
+	allowPublicAPI(writer)
+	if request.Method == http.MethodOptions {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer)
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(request.URL.Path, "/api/v1/robots/"), "/"), "/")
+	if len(parts) != 2 || parts[1] != "history" || len(parts[0]) != 20 {
+		writeError(writer, http.StatusNotFound, "route not found")
+		return
+	}
+	var uuid string
+	for _, record := range s.store.Robots() {
+		if subtle.ConstantTimeCompare([]byte(publicRobotID(s.config.JWTSecret, record.UUID)), []byte(parts[0])) == 1 {
+			uuid = record.UUID
+			break
+		}
+	}
+	if uuid == "" {
+		writeError(writer, http.StatusNotFound, "robot not found")
+		return
+	}
+	hours, ok := historyHours(writer, request)
+	if !ok {
+		return
+	}
+	to := time.Now().UTC()
+	points, err := s.store.History(uuid, to.Add(-time.Duration(hours)*time.Hour), to, 5000)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, "read telemetry history")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"points": points, "from": to.Add(-time.Duration(hours) * time.Hour), "to": to})
 }
 
 func (s *Server) adminRobots(writer http.ResponseWriter, request *http.Request) {
@@ -248,13 +366,37 @@ func (s *Server) adminRobotStream(writer http.ResponseWriter, request *http.Requ
 }
 
 func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) {
-	path := strings.TrimPrefix(request.URL.Path, "/api/v1/admin/robots/")
+	path := strings.Trim(strings.TrimPrefix(request.URL.Path, "/api/v1/admin/robots/"), "/")
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || !uuidPattern.MatchString(parts[0]) {
+	if len(parts) == 0 || !uuidPattern.MatchString(parts[0]) {
 		writeError(writer, http.StatusNotFound, "route not found")
 		return
 	}
-	uuid, action := parts[0], parts[1]
+	uuid := parts[0]
+	if len(parts) == 1 {
+		if request.Method != http.MethodDelete {
+			methodNotAllowed(writer)
+			return
+		}
+		record, ok := s.store.Robot(uuid)
+		if !ok {
+			writeError(writer, http.StatusNotFound, "robot not found")
+			return
+		}
+		if err := s.store.RemoveRobot(uuid); err != nil {
+			writeError(writer, http.StatusInternalServerError, "remove robot")
+			return
+		}
+		s.publicStream.broadcast(s.publicRemovalEvent(record))
+		s.adminStream.broadcast(s.adminRemovalEvent(uuid))
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if len(parts) != 2 {
+		writeError(writer, http.StatusNotFound, "route not found")
+		return
+	}
+	action := parts[1]
 	switch action {
 	case "remark":
 		if request.Method != http.MethodPatch {
@@ -272,6 +414,10 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 			writeError(writer, http.StatusBadRequest, "remark is longer than 200 characters")
 			return
 		}
+		if _, ok := s.store.Robot(uuid); !ok {
+			writeError(writer, http.StatusNotFound, "robot not found")
+			return
+		}
 		if err := s.store.SetRemark(uuid, body.Remark); err != nil {
 			writeError(writer, http.StatusInternalServerError, err.Error())
 			return
@@ -279,6 +425,11 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 		s.broadcastRobot(uuid)
 		writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
 	case "update":
+		robot, ok := s.store.Robot(uuid)
+		if !ok {
+			writeError(writer, http.StatusNotFound, "robot not found")
+			return
+		}
 		if request.Method == http.MethodDelete {
 			if err := s.store.SetDesired(uuid, ""); err != nil {
 				writeError(writer, http.StatusInternalServerError, err.Error())
@@ -302,15 +453,66 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 			writeError(writer, http.StatusBadRequest, "invalid version")
 			return
 		}
+		compatible := false
+		for _, release := range s.store.Releases() {
+			if release.Version == body.Version && release.OS == robot.OS && release.Arch == robot.Arch {
+				compatible = true
+				break
+			}
+		}
+		if !compatible {
+			writeError(writer, http.StatusConflict, "no compatible release exists for this robot")
+			return
+		}
 		if err := s.store.SetDesired(uuid, body.Version); err != nil {
 			writeError(writer, http.StatusInternalServerError, err.Error())
 			return
 		}
 		s.broadcastRobot(uuid)
 		writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
+	case "history":
+		if request.Method != http.MethodGet {
+			methodNotAllowed(writer)
+			return
+		}
+		if _, ok := s.store.Robot(uuid); !ok {
+			writeError(writer, http.StatusNotFound, "robot not found")
+			return
+		}
+		hours, ok := historyHours(writer, request)
+		if !ok {
+			return
+		}
+		to := time.Now().UTC()
+		points, err := s.store.History(uuid, to.Add(-time.Duration(hours)*time.Hour), to, 5000)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, "read telemetry history")
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"points": points, "from": to.Add(-time.Duration(hours) * time.Hour), "to": to})
 	default:
 		writeError(writer, http.StatusNotFound, "route not found")
 	}
+}
+
+func historyHours(writer http.ResponseWriter, request *http.Request) (int, bool) {
+	hours := 24
+	if value := request.URL.Query().Get("hours"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 24*365 {
+			writeError(writer, http.StatusBadRequest, "history hours must be between 1 and 8760")
+			return 0, false
+		}
+		hours = parsed
+	}
+	return hours, true
+}
+
+func allowPublicAPI(writer http.ResponseWriter) {
+	writer.Header().Set("Access-Control-Allow-Origin", "*")
+	writer.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	writer.Header().Set("Access-Control-Allow-Headers", "Accept")
+	writer.Header().Set("Cache-Control", "no-store")
 }
 
 func (s *Server) broadcastRobot(uuid string) {
@@ -403,7 +605,7 @@ func (s *Server) releaseAction(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	id := strings.TrimPrefix(request.URL.Path, "/api/v1/admin/releases/")
-	if id == "" || strings.Contains(id, "/") {
+	if !safeReleaseID(id) {
 		writeError(writer, http.StatusBadRequest, "invalid release id")
 		return
 	}
@@ -430,6 +632,25 @@ func (s *Server) requireAgent(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if !s.validSession(request) {
+			writeError(writer, http.StatusUnauthorized, "not authenticated")
+			return
+		}
+		required, err := s.store.PasswordChangeRequired(s.config.AdminUser)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, "read administrator state")
+			return
+		}
+		if required {
+			writeError(writer, http.StatusForbidden, "password change required")
+			return
+		}
+		next(writer, request)
+	}
+}
+
+func (s *Server) requireSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		if !s.validSession(request) {
 			writeError(writer, http.StatusUnauthorized, "not authenticated")
@@ -505,6 +726,8 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("X-Frame-Options", "DENY")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
+		writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
 		next.ServeHTTP(writer, request)
 	})
 }
@@ -514,6 +737,14 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, l
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values are not allowed")
+		}
 		writeError(writer, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return err
 	}
@@ -539,6 +770,69 @@ func methodNotAllowed(writer http.ResponseWriter) {
 func secureEqual(left, right string) bool {
 	leftHash, rightHash := sha256.Sum256([]byte(left)), sha256.Sum256([]byte(right))
 	return subtle.ConstantTimeCompare(leftHash[:], rightHash[:]) == 1
+}
+
+func validateAdminPassword(password string) error {
+	if len(password) < 12 || len(password) > 128 {
+		return errors.New("new password must contain between 12 and 128 characters")
+	}
+	var upper, lower, digit, symbol bool
+	for _, character := range password {
+		switch {
+		case unicode.IsUpper(character):
+			upper = true
+		case unicode.IsLower(character):
+			lower = true
+		case unicode.IsDigit(character):
+			digit = true
+		case unicode.IsPunct(character) || unicode.IsSymbol(character):
+			symbol = true
+		}
+	}
+	if !upper || !lower || !digit || !symbol {
+		return errors.New("new password must include upper-case, lower-case, number and symbol characters")
+	}
+	return nil
+}
+
+func (s *Server) secureCookie(request *http.Request) bool {
+	return s.config.CookieSecure || request.TLS != nil
+}
+
+func loginKey(request *http.Request) string {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return request.RemoteAddr
+}
+
+func (s *Server) loginAllowed(request *http.Request) bool {
+	key := loginKey(request)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	attempt := s.loginAttempts[key]
+	if time.Since(attempt.Last) > 10*time.Minute {
+		delete(s.loginAttempts, key)
+		return true
+	}
+	return attempt.Failures < 5
+}
+
+func (s *Server) recordLoginFailure(request *http.Request) {
+	key := loginKey(request)
+	s.mu.Lock()
+	attempt := s.loginAttempts[key]
+	attempt.Failures++
+	attempt.Last = time.Now()
+	s.loginAttempts[key] = attempt
+	s.mu.Unlock()
+}
+
+func (s *Server) resetLoginFailures(request *http.Request) {
+	s.mu.Lock()
+	delete(s.loginAttempts, loginKey(request))
+	s.mu.Unlock()
 }
 
 func randomToken() (string, error) {

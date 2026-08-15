@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
 	"baize/agent/internal/config"
 	"baize/shared/model"
+	"gopkg.in/yaml.v3"
 )
 
 type jointStateMessage struct {
@@ -30,6 +30,9 @@ func NewMotorCollector(cfg config.MotorConfig) *MotorCollector {
 }
 
 func (c *MotorCollector) Collect(ctx context.Context) (model.MotorSnapshot, error) {
+	if c.config.Source == "can_query" {
+		return collectMotorCAN(ctx, c.config)
+	}
 	snapshot := model.MotorSnapshot{
 		Enabled:                 true,
 		Source:                  "ros2_joint_state",
@@ -90,16 +93,16 @@ func parseJointState(data []byte, labels map[string]string, definitions map[stri
 	for i := 0; i < count; i++ {
 		definition := definitions[message.Name[i]]
 		result[i] = model.MotorState{
-			ID:           message.Name[i],
-			Label:        labels[message.Name[i]],
-			PositionRad:  message.Position[i],
-			VelocityRPS:  message.Velocity[i],
-			TorqueNm:     message.Effort[i],
-			Brand:        definition.Brand,
-			Model:        definition.Model,
-			CANInterface: definition.CANInterface,
-			ControlMode:  definition.ControlMode,
-			VirtualJoint: definition.VirtualJoint,
+			ID:                message.Name[i],
+			Label:             labels[message.Name[i]],
+			PositionRad:       message.Position[i],
+			VelocityRadPerSec: message.Velocity[i],
+			TorqueNm:          message.Effort[i],
+			Brand:             definition.Brand,
+			Model:             definition.Model,
+			CANInterface:      definition.CANInterface,
+			ControlMode:       definition.ControlMode,
+			VirtualJoint:      definition.VirtualJoint,
 		}
 	}
 	return result, nil

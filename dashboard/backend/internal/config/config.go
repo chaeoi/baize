@@ -9,30 +9,61 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+const DefaultAdminPassword = "Baize@Admin1"
+
+type Duration time.Duration
+
+func (d Duration) Value() time.Duration { return time.Duration(d) }
+
+func (d Duration) MarshalYAML() (any, error) { return time.Duration(d).String(), nil }
+
+func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return errors.New("duration must be a string such as 1m or 24h")
+	}
+	parsed, err := time.ParseDuration(node.Value)
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
+}
 
 type Config struct {
 	Dashboard DashboardConfig `yaml:"dashboard"`
 }
 
 type DashboardConfig struct {
-	AgentToken    string `yaml:"agent_token"`
-	AdminUser     string `yaml:"admin_user"`
-	AdminPassword string `yaml:"admin_password"`
-	JWTSecret     string `yaml:"jwt_secret"`
-	Listen        string `yaml:"listen"`
-	DataDir       string `yaml:"data_dir"`
-	FrontendDir   string `yaml:"frontend_dir"`
+	AgentToken             string   `yaml:"agent_token"`
+	AdminUser              string   `yaml:"admin_user"`
+	AdminPassword          string   `yaml:"admin_password"`
+	PasswordChangeRequired bool     `yaml:"password_change_required"`
+	JWTSecret              string   `yaml:"jwt_secret"`
+	Listen                 string   `yaml:"listen"`
+	DataDir                string   `yaml:"data_dir"`
+	HistoryDataDir         string   `yaml:"history_data_dir"`
+	HistoryRetention       Duration `yaml:"history_retention"`
+	HistorySampleInterval  Duration `yaml:"history_sample_interval"`
+	FrontendDir            string   `yaml:"frontend_dir"`
+	CookieSecure           bool     `yaml:"cookie_secure"`
 }
 
 func Default() Config {
 	return Config{Dashboard: DashboardConfig{
-		AdminUser:   "admin",
-		Listen:      ":8080",
-		DataDir:     "/data",
-		FrontendDir: "/opt/baize/dashboard/frontend",
+		AdminUser:              "admin",
+		AdminPassword:          DefaultAdminPassword,
+		PasswordChangeRequired: true,
+		Listen:                 ":8080",
+		DataDir:                "/data/control",
+		HistoryDataDir:         "/data/history",
+		HistoryRetention:       Duration(90 * 24 * time.Hour),
+		HistorySampleInterval:  Duration(time.Minute),
+		FrontendDir:            "/opt/baize/dashboard/frontend",
 	}}
 }
 
@@ -55,7 +86,7 @@ type GeneratedValues struct {
 	Created       bool
 	AdminUser     bool
 	AgentToken    string
-	AdminPassword string
+	AdminPassword bool
 	JWTSecret     string
 }
 
@@ -72,7 +103,7 @@ func LoadOrCreate(path string) (Config, GeneratedValues, error) {
 			return cfg, GeneratedValues{}, err
 		}
 	}
-	generated := GeneratedValues{Created: created}
+	generated := GeneratedValues{Created: created, AdminPassword: created}
 	if strings.TrimSpace(cfg.Dashboard.AdminUser) == "" {
 		cfg.Dashboard.AdminUser = "admin"
 		generated.AdminUser = true
@@ -85,11 +116,9 @@ func LoadOrCreate(path string) (Config, GeneratedValues, error) {
 		generated.AgentToken = cfg.Dashboard.AgentToken
 	}
 	if cfg.Dashboard.AdminPassword == "" {
-		cfg.Dashboard.AdminPassword, err = randomSecret(24)
-		if err != nil {
-			return cfg, generated, fmt.Errorf("generate admin password: %w", err)
-		}
-		generated.AdminPassword = cfg.Dashboard.AdminPassword
+		cfg.Dashboard.AdminPassword = DefaultAdminPassword
+		cfg.Dashboard.PasswordChangeRequired = true
+		generated.AdminPassword = true
 	}
 	if cfg.Dashboard.JWTSecret == "" {
 		cfg.Dashboard.JWTSecret, err = randomSecret(32)
@@ -101,7 +130,7 @@ func LoadOrCreate(path string) (Config, GeneratedValues, error) {
 	if err := cfg.Validate(); err != nil {
 		return cfg, generated, err
 	}
-	if created || generated.AdminUser || generated.AgentToken != "" || generated.AdminPassword != "" || generated.JWTSecret != "" || missingDefaults(data) {
+	if created || generated.AdminUser || generated.AgentToken != "" || generated.AdminPassword || generated.JWTSecret != "" || missingDefaults(data) {
 		if err := write(path, cfg); err != nil {
 			return cfg, generated, fmt.Errorf("write generated config: %w", err)
 		}
@@ -116,7 +145,7 @@ func missingDefaults(data []byte) bool {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return false
 	}
-	for _, field := range []string{"admin_user", "listen", "data_dir", "frontend_dir"} {
+	for _, field := range []string{"admin_user", "password_change_required", "listen", "data_dir", "history_data_dir", "history_retention", "history_sample_interval", "frontend_dir", "cookie_secure"} {
 		if _, ok := raw.Dashboard[field]; !ok {
 			return true
 		}
@@ -196,6 +225,18 @@ func (c Config) Validate() error {
 	}
 	if !filepath.IsAbs(d.DataDir) {
 		return errors.New("dashboard.data_dir must be an absolute path")
+	}
+	if !filepath.IsAbs(d.HistoryDataDir) {
+		return errors.New("dashboard.history_data_dir must be an absolute path")
+	}
+	if filepath.Clean(d.DataDir) == filepath.Clean(d.HistoryDataDir) {
+		return errors.New("dashboard.data_dir and dashboard.history_data_dir must be different directories")
+	}
+	if d.HistoryRetention.Value() < 24*time.Hour {
+		return errors.New("dashboard.history_retention must be at least 24h")
+	}
+	if d.HistorySampleInterval.Value() < 10*time.Second {
+		return errors.New("dashboard.history_sample_interval must be at least 10s")
 	}
 	if !filepath.IsAbs(d.FrontendDir) {
 		return errors.New("dashboard.frontend_dir must be an absolute path")

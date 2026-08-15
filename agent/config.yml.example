@@ -4,6 +4,8 @@ agent:
   robot_code: "M99"
   # Built-in hardware profile: battery protocol, motor inventory and joint names.
   robot_model: 2m_v0.1.2
+  # Optional external profile directory. Profiles are declarative and versioned with the Agent.
+  profile_dir: /opt/baize/agent/profiles
   dashboard_url: "http://dashboard.example.lan:8080"
   token: "replace-with-the-same-agent-token-as-dashboard"
   report_interval: 2s
