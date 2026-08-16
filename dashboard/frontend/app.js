@@ -284,6 +284,7 @@ function receiveEvent(event, mode) {
     const index = state.robots.findIndex((robot) => (mode === 'admin' ? robot.uuid : robot.id) === key);
     if (index === -1) state.robots.push(event.robot);
     else state.robots[index] = event.robot;
+    if (mode === 'public' && state.selected === event.robot.id) appendPublicMotorSamples(event.robot);
   }
   if (event.server_time && $('#fleet-latency')) {
     const serverTime = Date.parse(event.server_time);
@@ -450,8 +451,8 @@ function renderPublicHistoryControls() {
     range.value = fastScope ? '60' : '24';
     range.dataset.scope = rangeScope;
   }
-  const motors = new Map();
-  state.publicHistory.forEach((point) => (point.motors || []).forEach((motor) => motors.set(motor.id, motor.label || motor.id)));
+  const latestMotorPoint = [...state.publicHistory].reverse().find((point) => point.motors?.length);
+  const motors = new Map((latestMotorPoint?.motors || []).map((motor) => [motor.id, motor.label || motor.id]));
   const motorSelect = $('#public-motor-select');
   const current = state.publicHistoryMotor;
   const motorOptions = [...motors.entries()].map(([id, label]) => `<option value="${escapeHTML(id)}">${escapeHTML(label)}</option>`).join('');
@@ -488,7 +489,7 @@ async function loadPublicHistory(robot) {
     const query = fastScope ? `scope=motors&seconds=${range}` : `hours=${range}`;
     const data = await api(`/api/v1/robots/${encodeURIComponent(robot.id)}/history?${query}`);
     if (state.selected !== robot.id || requestID !== state.publicHistoryRequestID) return;
-    state.publicHistory = data.points || [];
+    state.publicHistory = fastScope ? mergePublicMotorPoints(data.points || [], state.publicHistoryRobot === robot.id ? state.publicHistory : []) : (data.points || []);
     state.publicHistoryRobot = robot.id;
     state.publicHistoryDrawKey = '';
     renderPublicHistoryControls();
@@ -500,6 +501,38 @@ async function loadPublicHistory(robot) {
     const selected = selectedPublicRobot();
     if (selected && selected.id !== robot.id) window.queueMicrotask(() => loadPublicHistory(selected));
   }
+}
+
+function motorSamplesToPoints(samples) {
+  return (samples || []).map((sample) => ({
+    at: sample.at,
+    motor_count: (sample.motors || []).length,
+    motor_topic_online: true,
+    motors: sample.motors || [],
+  }));
+}
+
+function mergePublicMotorPoints(fresh, existing = []) {
+  const byAt = new Map();
+  [...existing, ...fresh].forEach((point) => {
+    if (!point?.at || !Number.isFinite(Date.parse(point.at))) return;
+    byAt.set(new Date(point.at).toISOString(), { ...point, at: new Date(point.at).toISOString() });
+  });
+  const points = [...byAt.values()].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  if (!points.length) return [];
+  const seconds = Number($('#public-history-range')?.value) || 60;
+  const cutoff = Date.parse(points.at(-1).at) - seconds * 1000;
+  const visible = points.filter((point) => Date.parse(point.at) >= cutoff);
+  const maxPoints = 500 * seconds + 2000;
+  return visible.length > maxPoints ? visible.slice(-maxPoints) : visible;
+}
+
+function appendPublicMotorSamples(robot) {
+  if (state.publicHistoryMode === 'host' || !robot?.motor_samples?.length) return;
+  const points = motorSamplesToPoints(robot.motor_samples);
+  state.publicHistory = mergePublicMotorPoints(points, state.publicHistoryRobot === robot.id ? state.publicHistory : []);
+  state.publicHistoryRobot = robot.id;
+  state.publicHistoryDrawKey = '';
 }
 
 function renderSettings() {
@@ -712,8 +745,8 @@ function drawHistoryChart(points) {
 function drawPublicHistory(points) {
   const grid = $('#public-chart-grid');
   if (!grid || !selectedPublicRobot()) return;
-  const specs = publicChartSpecs(points).filter((spec) => finiteSeriesValues(points, spec).length > 1);
-  const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width)]);
+  const specs = publicChartSpecs(points).map((spec) => ({ ...spec, values: finiteSeriesValues(points, spec) })).filter((spec) => spec.values.length > 1);
+  const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, points[0]?.at, points.at(-1)?.at, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width)]);
   if (drawKey === state.publicHistoryDrawKey && grid.childElementCount) return;
   const empty = $('#public-history-empty');
   empty.classList.toggle('hidden', specs.length > 0);
@@ -724,11 +757,10 @@ function drawPublicHistory(points) {
     return;
   }
   grid.innerHTML = specs.map((spec, index) => {
-    const values = finiteSeriesValues(points, spec);
-    const latest = values.at(-1)?.value;
-    return `<article class="chart-card"><header><div><span>${escapeHTML(spec.group)}</span><h3>${escapeHTML(spec.label)}</h3></div><strong>${escapeHTML(formatChartValue(latest, spec))}</strong></header><div class="chart-canvas"><canvas data-chart-index="${index}"></canvas></div><footer><span>${escapeHTML(formatChartTime(values[0]?.at))}</span><span>${escapeHTML(formatChartTime(values.at(-1)?.at))}</span></footer></article>`;
+    const latest = spec.values.at(-1)?.value;
+    return `<article class="chart-card"><header><div><span>${escapeHTML(spec.group)}</span><h3>${escapeHTML(spec.label)}</h3></div><strong>${escapeHTML(formatChartValue(latest, spec))}</strong></header><div class="chart-canvas"><canvas data-chart-index="${index}"></canvas></div><footer><span>${escapeHTML(formatChartTime(spec.values[0]?.at))}</span><span>${escapeHTML(formatChartTime(spec.values.at(-1)?.at))}</span></footer></article>`;
   }).join('');
-  $$('#public-chart-grid canvas').forEach((canvas) => drawSingleMetricChart(canvas, points, specs[Number(canvas.dataset.chartIndex)]));
+  $$('#public-chart-grid canvas').forEach((canvas) => drawSingleMetricChart(canvas, specs[Number(canvas.dataset.chartIndex)]));
   state.publicHistoryDrawKey = drawKey;
 }
 
@@ -741,25 +773,37 @@ function publicChartSpecs(points) {
     ['battery_current', '电池电流', 'A', '#8e5e96'], ['battery_power_watts', '电池功率', 'W', '#ae7622']
   ];
   if (state.publicHistoryMode === 'host') return host.map(([field, label, unit, color, range]) => ({ key: field, group: '主机性能', label, unit, color, range, value: (point) => point[field] }));
-  const motors = [...new Map(points.flatMap((point) => (point.motors || []).map((motor) => [motor.id, motor.label || motor.id]))).entries()];
+  const motors = motorDescriptors(points);
   const metric = {
     torque_nm: ['转矩', 'N·m', '#b66b24'], velocity_rad_per_sec: ['速度', 'rad/s', '#3676ac'], position_rad: ['位置', 'rad', '#79559c']
   };
   if (state.publicHistoryMode === 'motors') {
     const [label, unit, color] = metric[state.publicHistoryMetric];
-    return motors.map(([id, motorLabel]) => ({ key: `motor:${id}:${state.publicHistoryMetric}`, group: motorLabel, label, unit, color, value: (point) => (point.motors || []).find((motor) => motor.id === id)?.[state.publicHistoryMetric] }));
+    return motors.map(({ id, label: motorLabel, index }) => ({ key: `motor:${id}:${state.publicHistoryMetric}`, group: motorLabel, label, unit, color, value: (point) => motorValue(point, id, index, state.publicHistoryMetric) }));
   }
-  const selected = motors.find(([id]) => id === state.publicHistoryMotor);
+  const selected = motors.find(({ id }) => id === state.publicHistoryMotor);
   if (!selected) return [];
-  return Object.entries(metric).map(([field, [label, unit, color]]) => ({ key: `motor:${selected[0]}:${field}`, group: selected[1], label, unit, color, value: (point) => (point.motors || []).find((motor) => motor.id === selected[0])?.[field] }));
+  return Object.entries(metric).map(([field, [label, unit, color]]) => ({ key: `motor:${selected.id}:${field}`, group: selected.label, label, unit, color, value: (point) => motorValue(point, selected.id, selected.index, field) }));
+}
+
+function motorDescriptors(points) {
+  const point = [...points].reverse().find((item) => item.motors?.length);
+  return (point?.motors || []).map((motor, index) => ({ id: motor.id, label: motor.label || motor.id, index }));
+}
+
+function motorValue(point, id, index, field) {
+  const motor = point.motors?.[index];
+  if (motor?.id === id) return motor[field];
+  return point.motors?.find((item) => item.id === id)?.[field];
 }
 
 function finiteSeriesValues(points, spec) {
   return points.map((point) => ({ at: point.at, value: Number(spec.value(point)) })).filter((entry) => Number.isFinite(entry.value));
 }
 
-function drawSingleMetricChart(canvas, points, spec) {
-  const values = points.map((point) => Number(spec.value(point)));
+function drawSingleMetricChart(canvas, spec) {
+  const entries = spec.values || [];
+  const values = entries.map((entry) => Number(entry.value));
   const finite = values.filter(Number.isFinite);
   if (finite.length < 2) return;
   const bounds = canvas.parentElement.getBoundingClientRect();
@@ -797,7 +841,7 @@ function drawSingleMetricChart(canvas, points, spec) {
   let started = false;
   values.forEach((value, index) => {
     if (!Number.isFinite(value)) { started = false; return; }
-    const x = padding.left + chartWidth * (points.length === 1 ? .5 : index / (points.length - 1));
+    const x = padding.left + chartWidth * (entries.length === 1 ? .5 : index / (entries.length - 1));
     const y = padding.top + chartHeight * (1 - (value - min) / (max - min));
     if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
   });

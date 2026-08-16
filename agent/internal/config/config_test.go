@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestBuildUsesBuiltInRobotProfile(t *testing.T) {
@@ -15,7 +16,7 @@ func TestBuildUsesBuiltInRobotProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Motor.Topic != "/motor/q2w_upper_motor_joint_state" || cfg.Motor.ROSUser != "ubuntu" || cfg.Motor.ROSEnvironment["ROS_LOCALHOST_ONLY"] != "1" || cfg.Motor.Definitions["motor_id_22"].Model != "model-22" {
+	if cfg.Motor.Topic != "/motor/q2w_upper_motor_joint_state" || cfg.Motor.ROSUser != "ubuntu" || cfg.Motor.ROSEnvironment["ROS_LOCALHOST_ONLY"] != "1" || cfg.Motor.Definitions["motor_id_22"].Model != "model-22" || cfg.Motor.FastSampleRateHz != 500 || cfg.Motor.FastBufferSeconds != 10 || cfg.Motor.FastBatchInterval.Value() != 2*time.Second {
 		t.Fatalf("unexpected built-in motor profile: %+v", cfg.Motor)
 	}
 	if cfg.BMS.Protocol != "sensor_msgs_battery_state" || cfg.BMS.ROSTopic != "/bms_can/battery_data" || cfg.BMS.ReadTimeout.Value() <= 0 {

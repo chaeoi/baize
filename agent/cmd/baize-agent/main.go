@@ -66,7 +66,11 @@ func run(ctx context.Context, cfg config.Config) error {
 	}
 
 	identity := model.Robot{UUID: cfg.Agent.UUID, Code: cfg.Agent.RobotCode, Model: cfg.Agent.RobotModel, Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH}
-	ticker := time.NewTicker(cfg.Agent.ReportInterval.Value())
+	reportInterval := cfg.Agent.ReportInterval.Value()
+	if cfg.Motor.FastSampleRateHz > 0 && cfg.Motor.FastBatchInterval.Value() > 0 {
+		reportInterval = cfg.Motor.FastBatchInterval.Value()
+	}
+	ticker := time.NewTicker(reportInterval)
 	defer ticker.Stop()
 	for {
 		started := time.Now()

@@ -28,15 +28,14 @@ type jointStateMessage struct {
 }
 
 type MotorCollector struct {
-	config       config.MotorConfig
-	streamOnce   sync.Once
-	readyOnce    sync.Once
-	ready        chan struct{}
-	mu           sync.Mutex
-	latest       model.MotorSnapshot
-	pending      []model.MotorSample
-	lastSampleAt time.Time
-	streamErr    error
+	config     config.MotorConfig
+	streamOnce sync.Once
+	readyOnce  sync.Once
+	ready      chan struct{}
+	mu         sync.Mutex
+	latest     model.MotorSnapshot
+	pending    []model.MotorSample
+	streamErr  error
 }
 
 var rosEnvironmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
@@ -210,16 +209,13 @@ func (c *MotorCollector) consumeStreamMessage(data []byte) {
 	now := time.Now().UTC()
 	c.mu.Lock()
 	c.latest = model.MotorSnapshot{Enabled: true, Source: "ros2_joint_state", Topic: c.config.Topic, TopicOnline: true, SampledAt: now, Motors: cloneMotorStates(motors), SampleRateHz: c.config.FastSampleRateHz}
-	if c.lastSampleAt.IsZero() || now.Sub(c.lastSampleAt) >= time.Duration(float64(time.Second)/c.config.FastSampleRateHz) {
-		c.pending = append(c.pending, model.MotorSample{At: now, Motors: compactMotorStates(motors)})
-		maxPending := int(c.config.FastSampleRateHz * float64(c.config.FastBufferSeconds))
-		if maxPending < 1 {
-			maxPending = 1
-		}
-		if len(c.pending) > maxPending {
-			c.pending = append([]model.MotorSample(nil), c.pending[len(c.pending)-maxPending:]...)
-		}
-		c.lastSampleAt = now
+	c.pending = append(c.pending, model.MotorSample{At: now, Motors: compactMotorStates(motors)})
+	maxPending := int(c.config.FastSampleRateHz * float64(c.config.FastBufferSeconds))
+	if maxPending < 1 {
+		maxPending = 1
+	}
+	if len(c.pending) > maxPending {
+		c.pending = append([]model.MotorSample(nil), c.pending[len(c.pending)-maxPending:]...)
 	}
 	c.streamErr = nil
 	c.mu.Unlock()

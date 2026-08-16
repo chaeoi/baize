@@ -83,6 +83,7 @@ type MotorConfig struct {
 	ReadTimeout       Duration                   `json:"read_timeout" yaml:"read_timeout"`
 	FastSampleRateHz  float64                    `json:"fast_sample_rate_hz" yaml:"fast_sample_rate_hz"`
 	FastBufferSeconds int                        `json:"fast_buffer_seconds" yaml:"fast_buffer_seconds"`
+	FastBatchInterval Duration                   `json:"fast_batch_interval" yaml:"fast_batch_interval"`
 	JointLabels       map[string]string          `json:"joint_labels" yaml:"joint_labels"`
 	Definitions       map[string]MotorDefinition `json:"definitions" yaml:"definitions"`
 }
@@ -293,6 +294,9 @@ func (c *Config) Validate() error {
 		}
 		if c.Motor.FastSampleRateHz > 0 && (c.Motor.FastBufferSeconds < 1 || c.Motor.FastBufferSeconds > 60) {
 			return errors.New("motor.fast_buffer_seconds must be between 1 and 60 when fast sampling is enabled")
+		}
+		if c.Motor.FastSampleRateHz > 0 && (c.Motor.FastBatchInterval.Value() < time.Second || c.Motor.FastBatchInterval.Value() > time.Minute) {
+			return errors.New("motor.fast_batch_interval must be between 1s and 1m when fast sampling is enabled")
 		}
 	}
 	if c.BMS.Enabled {
