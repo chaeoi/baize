@@ -1,8 +1,14 @@
 # 白泽 Baize
 
-白泽由机器人端 Agent 和管理 Dashboard 组成。Dashboard 的控制数据与监控历史
-分别存放在独立 SQLite 数据库中：迁移时只复制 `control` 即可保留机器人身份、
-备注、管理员账号、发布版本和 Dashboard 密钥；`history` 可按保留策略丢弃。
+白泽由机器人端 Agent 和管理 Dashboard 组成。Dashboard 的控制数据保存在独立的
+SQLite 数据库 `/data/control/control.db`；监控历史保存在嵌入式 VictoriaMetrics TSDB
+目录 `/data/history/host` 与 `/data/history/motor`，不需要额外数据库容器。迁移时只复制
+`control` 即可保留机器人身份、备注、管理员账号、发布版本和 Dashboard 密钥；历史目录可按
+保留策略丢弃。旧版 `history.db` 不再读取或迁移。
+
+主机、电池、GPU 和电机摘要按 `history_sample_interval`（默认 1 分钟）写入 `host`，
+默认保留 90 天；500 Hz 电机原始位置、速度和转矩写入独立的 `motor` 时间序列，默认保留
+2 分钟。长周期查询会覆盖完整时间范围降采样，短窗口电机查询保留原始采样点。
 
 型号能力随 GitHub Release 编入二进制：Agent 只读取 ROS2 状态话题，BMS CAN
 查询由独立的 [`batcan`](https://github.com/chaeoi/batcan) 服务负责。部署仍使用

@@ -172,6 +172,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 .segmented-control button.active { color: var(--ink); background: #fff; box-shadow: 0 1px 3px rgba(23, 33, 43, .14); }
 .public-history-toolbar .compact-select { min-width: 125px; }
 .history-empty { display: grid; min-height: 180px; place-items: center; color: var(--muted); font-size: 13px; }
+.history-loading { display: grid; min-height: 180px; place-items: center; }
+.history-loading span { display: block; width: min(52%, 360px); height: 8px; background: #e7ecee; border-radius: 4px; animation: history-pulse 1.2s ease-in-out infinite; }
+@keyframes history-pulse { 0%, 100% { opacity: .42; } 50% { opacity: .9; } }
 .chart-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 15px; background: #f8f9fa; }
 .chart-card { min-width: 0; overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: 5px; }
 .chart-card header { display: flex; align-items: start; justify-content: space-between; gap: 14px; padding: 13px 14px 9px; }

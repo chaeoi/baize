@@ -57,6 +57,7 @@ type PublicRobot struct {
 	CollectedAt       time.Time           `json:"collected_at"`
 	Summary           PublicSummary       `json:"summary"`
 	MotorSamples      []model.MotorSample `json:"motor_samples,omitempty"`
+	MotorLabels       map[string]string   `json:"motor_labels,omitempty"`
 	MotorSampleRateHz float64             `json:"motor_sample_rate_hz,omitempty"`
 }
 
@@ -214,6 +215,15 @@ func (s *Server) publicRobotWithSamples(record RobotRecord, includeSamples bool)
 	if includeSamples && telemetry.Motors != nil && len(telemetry.Motors.Samples) > 0 {
 		robot.MotorSamples = telemetry.Motors.Samples
 		robot.MotorSampleRateHz = telemetry.Motors.SampleRateHz
+		for _, motor := range telemetry.Motors.Motors {
+			if motor.ID == "" || motor.Label == "" {
+				continue
+			}
+			if robot.MotorLabels == nil {
+				robot.MotorLabels = make(map[string]string)
+			}
+			robot.MotorLabels[motor.ID] = motor.Label
+		}
 	}
 	return robot
 }

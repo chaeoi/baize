@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -118,7 +119,7 @@ func TestStoreRoundTripsComplete500HzMotorBatch(t *testing.T) {
 	for sampleIndex := range samples {
 		motors := make([]model.MotorSampleState, 32)
 		for motorIndex := range motors {
-			motors[motorIndex] = model.MotorSampleState{ID: "motor", PositionRad: float64(sampleIndex), VelocityRadPerSec: float64(motorIndex), TorqueNm: float64(sampleIndex+motorIndex) + 0.25}
+			motors[motorIndex] = model.MotorSampleState{ID: fmt.Sprintf("motor-%02d", motorIndex), PositionRad: float64(sampleIndex), VelocityRadPerSec: float64(motorIndex), TorqueNm: float64(sampleIndex+motorIndex) + 0.25}
 		}
 		samples[sampleIndex] = model.MotorSample{At: startedAt.Add(time.Duration(sampleIndex) * 2 * time.Millisecond), Motors: motors}
 	}
@@ -141,12 +142,23 @@ func TestStoreRoundTripsComplete500HzMotorBatch(t *testing.T) {
 	if len(points[999].Motors) != 32 || points[999].Motors[31].TorqueNm != 1030.25 {
 		t.Fatalf("500Hz batch last point was not preserved: %+v", points[999])
 	}
-	var batches, sampleCount int
-	if err := store.history.QueryRow(`SELECT COUNT(*), COALESCE(SUM(sample_count), 0) FROM motor_sample_batches WHERE robot_uuid = ?`, telemetry.Robot.UUID).Scan(&batches, &sampleCount); err != nil {
-		t.Fatal(err)
+}
+
+func TestOrderedHistoryPointsDownsamplesAcrossTheRequestedRange(t *testing.T) {
+	points := make(map[int64]*HistoryPoint, 10)
+	for index := int64(0); index < 10; index++ {
+		points[index] = &HistoryPoint{At: time.UnixMilli(index)}
 	}
-	if batches != 1 || sampleCount != 1000 {
-		t.Fatalf("motor history was not stored as one batch: batches=%d samples=%d", batches, sampleCount)
+	result := orderedHistoryPoints(points, 3)
+	if len(result) != 3 {
+		t.Fatalf("downsampled point count=%d, want 3", len(result))
+	}
+	got := []int64{result[0].At.UnixMilli(), result[1].At.UnixMilli(), result[2].At.UnixMilli()}
+	want := []int64{0, 4, 9}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("downsampled timestamps=%v, want %v", got, want)
+		}
 	}
 }
 
