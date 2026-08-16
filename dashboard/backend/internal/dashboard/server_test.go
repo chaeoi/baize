@@ -154,10 +154,14 @@ func TestPublicRobotStreamStartsWithRedactedSnapshot(t *testing.T) {
 func TestPublicHistoryIsCrossOriginAndRedacted(t *testing.T) {
 	store := newTestStore(t)
 	uuid := "52446a60-7483-4ba7-b8c7-b85f60b2a00f"
+	sampleAt := time.Now().UTC()
 	if err := store.PutTelemetry(model.Telemetry{
 		SchemaVersion: model.SchemaVersion, Robot: model.Robot{UUID: uuid, Code: "M99", Hostname: "private-host", OS: "linux", Arch: "arm64"},
 		CollectedAt: time.Now().UTC(), System: &model.SystemMetrics{CPUUsagePercent: 25},
-		Motors: &model.MotorSnapshot{Motors: []model.MotorState{{ID: "hip", Label: "Hip", PositionRad: 1, VelocityRadPerSec: 2, TorqueNm: 3, CANInterface: "can0"}}},
+		Motors: &model.MotorSnapshot{
+			Motors:  []model.MotorState{{ID: "hip", Label: "Hip", PositionRad: 1, VelocityRadPerSec: 2, TorqueNm: 3, CANInterface: "can0"}},
+			Samples: []model.MotorSample{{At: sampleAt, Motors: []model.MotorSampleState{{ID: "hip", Label: "Hip", PositionRad: 1.1, VelocityRadPerSec: 2.1, TorqueNm: 3.1}}}},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +187,12 @@ func TestPublicHistoryIsCrossOriginAndRedacted(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("public history omitted %q: %s", expected, body)
 		}
+	}
+	fastRequest := httptest.NewRequest(http.MethodGet, "/api/v1/robots/"+id+"/history?scope=motors&seconds=10", nil)
+	fastResponse := httptest.NewRecorder()
+	server.ServeHTTP(fastResponse, fastRequest)
+	if fastResponse.Code != http.StatusOK || !strings.Contains(fastResponse.Body.String(), "3.1") {
+		t.Fatalf("public fast motor history status=%d body=%s", fastResponse.Code, fastResponse.Body.String())
 	}
 }
 

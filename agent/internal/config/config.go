@@ -74,15 +74,17 @@ type GPUConfig struct {
 }
 
 type MotorConfig struct {
-	Enabled        bool                       `json:"enabled" yaml:"enabled"`
-	Topic          string                     `json:"topic" yaml:"topic"`
-	MessageType    string                     `json:"message_type" yaml:"message_type"`
-	ROSSetup       []string                   `json:"ros_setup" yaml:"ros_setup"`
-	ROSEnvironment map[string]string          `json:"ros_environment" yaml:"ros_environment"`
-	ROSUser        string                     `json:"ros_user" yaml:"ros_user"`
-	ReadTimeout    Duration                   `json:"read_timeout" yaml:"read_timeout"`
-	JointLabels    map[string]string          `json:"joint_labels" yaml:"joint_labels"`
-	Definitions    map[string]MotorDefinition `json:"definitions" yaml:"definitions"`
+	Enabled           bool                       `json:"enabled" yaml:"enabled"`
+	Topic             string                     `json:"topic" yaml:"topic"`
+	MessageType       string                     `json:"message_type" yaml:"message_type"`
+	ROSSetup          []string                   `json:"ros_setup" yaml:"ros_setup"`
+	ROSEnvironment    map[string]string          `json:"ros_environment" yaml:"ros_environment"`
+	ROSUser           string                     `json:"ros_user" yaml:"ros_user"`
+	ReadTimeout       Duration                   `json:"read_timeout" yaml:"read_timeout"`
+	FastSampleRateHz  float64                    `json:"fast_sample_rate_hz" yaml:"fast_sample_rate_hz"`
+	FastBufferSeconds int                        `json:"fast_buffer_seconds" yaml:"fast_buffer_seconds"`
+	JointLabels       map[string]string          `json:"joint_labels" yaml:"joint_labels"`
+	Definitions       map[string]MotorDefinition `json:"definitions" yaml:"definitions"`
 }
 
 type MotorDefinition struct {
@@ -144,12 +146,14 @@ func Default() Config {
 			Timeout: Duration(3 * time.Second),
 		},
 		Motor: MotorConfig{
-			Topic:       "/motor/joint_states",
-			MessageType: "sensor_msgs/msg/JointState",
-			ROSSetup:    []string{"/opt/ros/humble/setup.bash"},
-			ReadTimeout: Duration(3 * time.Second),
-			JointLabels: map[string]string{},
-			Definitions: make(map[string]MotorDefinition),
+			Topic:             "/motor/joint_states",
+			MessageType:       "sensor_msgs/msg/JointState",
+			ROSSetup:          []string{"/opt/ros/humble/setup.bash"},
+			ReadTimeout:       Duration(3 * time.Second),
+			FastSampleRateHz:  0,
+			FastBufferSeconds: 15,
+			JointLabels:       map[string]string{},
+			Definitions:       make(map[string]MotorDefinition),
 		},
 		BMS: BMSConfig{
 			Protocol:       "sensor_msgs_battery_state",
@@ -283,6 +287,12 @@ func (c *Config) Validate() error {
 		}
 		if c.Motor.ReadTimeout.Value() <= 0 {
 			return errors.New("motor.read_timeout must be positive")
+		}
+		if c.Motor.FastSampleRateHz < 0 || c.Motor.FastSampleRateHz > 500 {
+			return errors.New("motor.fast_sample_rate_hz must be between 0 and 500")
+		}
+		if c.Motor.FastSampleRateHz > 0 && (c.Motor.FastBufferSeconds < 1 || c.Motor.FastBufferSeconds > 60) {
+			return errors.New("motor.fast_buffer_seconds must be between 1 and 60 when fast sampling is enabled")
 		}
 	}
 	if c.BMS.Enabled {

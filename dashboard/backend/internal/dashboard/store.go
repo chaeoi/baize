@@ -87,15 +87,16 @@ type MotorHistoryPoint struct {
 }
 
 type Store struct {
-	mu            sync.RWMutex
-	dataDir       string
-	historyDir    string
-	control       *sql.DB
-	history       *sql.DB
-	robots        map[string]RobotRecord
-	historyEvery  time.Duration
-	historyKeep   time.Duration
-	lastHistoryGC time.Time
+	mu              sync.RWMutex
+	dataDir         string
+	historyDir      string
+	control         *sql.DB
+	history         *sql.DB
+	robots          map[string]RobotRecord
+	historyEvery    time.Duration
+	historyKeep     time.Duration
+	fastHistoryKeep time.Duration
+	lastHistoryGC   time.Time
 }
 
 func NewStore(dataDir, historyDir string, options StoreOptions) (*Store, error) {
@@ -126,7 +127,7 @@ func NewStore(dataDir, historyDir string, options StoreOptions) (*Store, error) 
 		_ = control.Close()
 		return nil, fmt.Errorf("open history database: %w", err)
 	}
-	store := &Store{dataDir: dataDir, historyDir: historyDir, control: control, history: history, robots: make(map[string]RobotRecord), historyEvery: options.HistorySampleInterval, historyKeep: options.HistoryRetention}
+	store := &Store{dataDir: dataDir, historyDir: historyDir, control: control, history: history, robots: make(map[string]RobotRecord), historyEvery: options.HistorySampleInterval, historyKeep: options.HistoryRetention, fastHistoryKeep: 15 * time.Minute}
 	if err := store.migrateSchema(); err != nil {
 		store.Close()
 		return nil, err
@@ -223,11 +224,24 @@ CREATE TABLE IF NOT EXISTS telemetry_samples (
   motors_json BLOB
 );
 CREATE INDEX IF NOT EXISTS telemetry_samples_robot_time_idx ON telemetry_samples(robot_uuid, received_at);`
+	fastHistorySchema := `
+CREATE TABLE IF NOT EXISTS motor_samples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  robot_uuid TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  received_at INTEGER NOT NULL,
+  motor_count INTEGER NOT NULL DEFAULT 0,
+  motors_json BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS motor_samples_robot_time_idx ON motor_samples(robot_uuid, received_at);`
 	if _, err := s.control.Exec(controlSchema); err != nil {
 		return fmt.Errorf("migrate control database: %w", err)
 	}
 	if _, err := s.history.Exec(historySchema); err != nil {
 		return fmt.Errorf("migrate history database: %w", err)
+	}
+	if _, err := s.history.Exec(fastHistorySchema); err != nil {
+		return fmt.Errorf("migrate fast motor history: %w", err)
 	}
 	if err := ensureColumn(s.history, "telemetry_samples", "motors_json", "BLOB"); err != nil {
 		return fmt.Errorf("migrate motor history: %w", err)
@@ -564,6 +578,9 @@ func (s *Store) PutTelemetry(telemetry model.Telemetry) error {
 	if err := s.insertHistory(identity.UUID, telemetry, now); err != nil {
 		slog.Warn("store telemetry history", "robot_uuid", identity.UUID, "error", err)
 	}
+	if err := s.insertFastMotorHistory(identity.UUID, telemetry, now); err != nil {
+		slog.Warn("store fast motor history", "robot_uuid", identity.UUID, "error", err)
+	}
 	return nil
 }
 
@@ -640,6 +657,9 @@ func (s *Store) RemoveRobot(uuid string) error {
 		return err
 	}
 	if _, err := s.history.Exec(`DELETE FROM telemetry_samples WHERE robot_uuid = ?`, uuid); err != nil {
+		return err
+	}
+	if _, err := s.history.Exec(`DELETE FROM motor_samples WHERE robot_uuid = ?`, uuid); err != nil {
 		return err
 	}
 	delete(s.robots, uuid)
@@ -780,6 +800,35 @@ func (s *Store) insertHistory(uuid string, telemetry model.Telemetry, receivedAt
 	return nil
 }
 
+func (s *Store) insertFastMotorHistory(uuid string, telemetry model.Telemetry, receivedAt time.Time) error {
+	if telemetry.Motors == nil || len(telemetry.Motors.Samples) == 0 {
+		return nil
+	}
+	tx, err := s.history.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, sample := range telemetry.Motors.Samples {
+		motors := make([]MotorHistoryPoint, len(sample.Motors))
+		for index, motor := range sample.Motors {
+			motors[index] = MotorHistoryPoint{ID: motor.ID, Label: motor.Label, PositionRad: motor.PositionRad, VelocityRadPerSec: motor.VelocityRadPerSec, TorqueNm: motor.TorqueNm}
+		}
+		motorsJSON, err := encodeMotorHistory(motors)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO motor_samples(robot_uuid, at, received_at, motor_count, motors_json) VALUES(?, ?, ?, ?, ?)`, uuid, sample.At.UnixNano(), receivedAt.UnixNano(), len(motors), motorsJSON); err != nil {
+			return err
+		}
+	}
+	cutoff := receivedAt.Add(-s.fastHistoryKeep).UnixNano()
+	if _, err := tx.Exec(`DELETE FROM motor_samples WHERE robot_uuid = ? AND received_at < ?`, uuid, cutoff); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func makeHistoryPoint(telemetry model.Telemetry) HistoryPoint {
 	at := telemetry.CollectedAt
 	if at.IsZero() {
@@ -854,6 +903,37 @@ func (s *Store) History(uuid string, from, to time.Time, limit int) ([]HistoryPo
 			if err := decodeMotorHistory(motorsJSON, &point.Motors); err != nil {
 				return nil, fmt.Errorf("decode motor history: %w", err)
 			}
+		}
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}
+
+func (s *Store) FastMotorHistory(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 || limit > 5000 {
+		limit = 2000
+	}
+	rows, err := s.history.Query(`SELECT at, motor_count, motors_json FROM (SELECT at, motor_count, motors_json FROM motor_samples WHERE robot_uuid = ? AND at >= ? AND at <= ? ORDER BY at DESC LIMIT ?) ORDER BY at ASC`, uuid, from.UnixNano(), to.UnixNano(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	points := make([]HistoryPoint, 0)
+	for rows.Next() {
+		var point HistoryPoint
+		var at int64
+		var motorCount int
+		var motorsJSON []byte
+		if err := rows.Scan(&at, &motorCount, &motorsJSON); err != nil {
+			return nil, err
+		}
+		point.At = unixNano(at)
+		point.MotorCount = motorCount
+		point.MotorTopicOnline = true
+		if err := decodeMotorHistory(motorsJSON, &point.Motors); err != nil {
+			return nil, fmt.Errorf("decode fast motor history: %w", err)
 		}
 		points = append(points, point)
 	}

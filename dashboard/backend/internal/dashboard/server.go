@@ -347,17 +347,29 @@ func (s *Server) publicRobotAction(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusNotFound, "robot not found")
 		return
 	}
-	hours, ok := historyHours(writer, request)
+	scope := request.URL.Query().Get("scope")
+	if scope != "" && scope != "motors" {
+		writeError(writer, http.StatusBadRequest, "history scope must be host or motors")
+		return
+	}
+	duration, ok := historyDuration(writer, request, scope == "motors")
 	if !ok {
 		return
 	}
 	to := time.Now().UTC()
-	points, err := s.store.History(uuid, to.Add(-time.Duration(hours)*time.Hour), to, 5000)
+	from := to.Add(-duration)
+	var points []HistoryPoint
+	var err error
+	if scope == "motors" {
+		points, err = s.store.FastMotorHistory(uuid, from, to, 5000)
+	} else {
+		points, err = s.store.History(uuid, from, to, 5000)
+	}
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "read telemetry history")
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"points": points, "from": to.Add(-time.Duration(hours) * time.Hour), "to": to})
+	writeJSON(writer, http.StatusOK, map[string]any{"points": points, "from": from, "to": to, "scope": scope})
 }
 
 func (s *Server) adminRobots(writer http.ResponseWriter, request *http.Request) {
@@ -490,17 +502,29 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 			writeError(writer, http.StatusNotFound, "robot not found")
 			return
 		}
-		hours, ok := historyHours(writer, request)
+		scope := request.URL.Query().Get("scope")
+		if scope != "" && scope != "motors" {
+			writeError(writer, http.StatusBadRequest, "history scope must be host or motors")
+			return
+		}
+		duration, ok := historyDuration(writer, request, scope == "motors")
 		if !ok {
 			return
 		}
 		to := time.Now().UTC()
-		points, err := s.store.History(uuid, to.Add(-time.Duration(hours)*time.Hour), to, 5000)
+		from := to.Add(-duration)
+		var points []HistoryPoint
+		var err error
+		if scope == "motors" {
+			points, err = s.store.FastMotorHistory(uuid, from, to, 5000)
+		} else {
+			points, err = s.store.History(uuid, from, to, 5000)
+		}
 		if err != nil {
 			writeError(writer, http.StatusInternalServerError, "read telemetry history")
 			return
 		}
-		writeJSON(writer, http.StatusOK, map[string]any{"points": points, "from": to.Add(-time.Duration(hours) * time.Hour), "to": to})
+		writeJSON(writer, http.StatusOK, map[string]any{"points": points, "from": from, "to": to, "scope": scope})
 	default:
 		writeError(writer, http.StatusNotFound, "route not found")
 	}
@@ -517,6 +541,23 @@ func historyHours(writer http.ResponseWriter, request *http.Request) (int, bool)
 		hours = parsed
 	}
 	return hours, true
+}
+
+func historyDuration(writer http.ResponseWriter, request *http.Request, fast bool) (time.Duration, bool) {
+	if !fast {
+		hours, ok := historyHours(writer, request)
+		return time.Duration(hours) * time.Hour, ok
+	}
+	seconds := 60
+	if value := request.URL.Query().Get("seconds"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 60 {
+			writeError(writer, http.StatusBadRequest, "fast motor history seconds must be between 1 and 60")
+			return 0, false
+		}
+		seconds = parsed
+	}
+	return time.Duration(seconds) * time.Second, true
 }
 
 func allowPublicAPI(writer http.ResponseWriter) {

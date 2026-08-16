@@ -66,7 +66,7 @@ func build2MProfile() robotProfile {
 		add(id, canInterface, "PT", id == 25 || id == 26 || id == 31 || id == 32)
 	}
 	return robotProfile{
-		Motor: MotorConfig{Enabled: true, Topic: "/motor/q2w_upper_motor_joint_state", MessageType: "sensor_msgs/msg/JointState", ROSSetup: []string{"/opt/ros/humble/setup.bash"}, ROSEnvironment: map[string]string{"ROS_LOCALHOST_ONLY": "1"}, ROSUser: "ubuntu", ReadTimeout: Duration(5e9), JointLabels: labels, Definitions: definitions},
+		Motor: MotorConfig{Enabled: true, Topic: "/motor/q2w_upper_motor_joint_state", MessageType: "sensor_msgs/msg/JointState", ROSSetup: []string{"/opt/ros/humble/setup.bash"}, ROSEnvironment: map[string]string{"ROS_LOCALHOST_ONLY": "1"}, ROSUser: "ubuntu", ReadTimeout: Duration(5e9), FastSampleRateHz: 50, FastBufferSeconds: 15, JointLabels: labels, Definitions: definitions},
 		BMS:   BMSConfig{Enabled: true, Protocol: "sensor_msgs_battery_state", ROSTopic: "/bms_can/battery_data", ROSMessageType: "sensor_msgs/msg/BatteryState", ROSSetup: []string{"/opt/ros/humble/setup.bash"}, ROSEnvironment: map[string]string{"ROS_LOCALHOST_ONLY": "1"}, ROSUser: "ubuntu", ReadTimeout: Duration(5e9), Specification: BatterySpecification{PackModel: "XINXIANGYANG", SeriesCells: 24}},
 	}
 }
