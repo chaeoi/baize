@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"time"
 )
 
@@ -16,6 +17,15 @@ var robotProfiles = map[string]robotProfile{
 }
 
 var profileNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+func SupportedRobotModels() []string {
+	models := make([]string, 0, len(robotProfiles))
+	for model := range robotProfiles {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	return models
+}
 
 func profileForModel(name string) (robotProfile, error) {
 	if !profileNamePattern.MatchString(name) {

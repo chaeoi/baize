@@ -8,7 +8,7 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/baize/agent
-ExecStart=/opt/baize/agent/baize-agent
+ExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml
 Restart=always
 RestartSec=3
 Environment=ROS_LOG_DIR=/var/log/baize-agent/ros
