@@ -39,12 +39,17 @@ func TestVersionPattern(t *testing.T) {
 func TestStoreSeparatesControlAndHistoryAndKeepsOfflineRobots(t *testing.T) {
 	root := t.TempDir()
 	options := StoreOptions{AdminUser: "admin", BootstrapPassword: "Baize@Admin1", RequirePasswordChange: true, HistorySampleInterval: time.Second}
+	sampleAt := time.Now().UTC()
 	telemetry := model.Telemetry{
 		SchemaVersion: model.SchemaVersion,
 		Robot:         model.Robot{UUID: "52446a60-7483-4ba7-b8c7-b85f60b2a00f", Code: "M99", Model: "2m_v0.1.2", Hostname: "m99", OS: "linux", Arch: "arm64"},
 		AgentVersion:  "20260815", CollectedAt: time.Now().UTC(),
 		System: &model.SystemMetrics{CPUUsagePercent: 37, MemoryTotalBytes: 100, MemoryUsedBytes: 42},
-		Motors: &model.MotorSnapshot{TopicOnline: true, Motors: []model.MotorState{{ID: "left_hip", PositionRad: 1.2, VelocityRadPerSec: 2.3, TorqueNm: 4.5}}},
+		Motors: &model.MotorSnapshot{
+			TopicOnline: true,
+			Motors:      []model.MotorState{{ID: "left_hip", PositionRad: 1.2, VelocityRadPerSec: 2.3, TorqueNm: 4.5}},
+			Samples:     []model.MotorSample{{At: sampleAt, Motors: []model.MotorSampleState{{ID: "left_hip", PositionRad: 1.3, VelocityRadPerSec: 2.4, TorqueNm: 5.6}}}},
+		},
 	}
 	store, err := NewStore(root+"/control", root+"/history", options)
 	if err != nil {
@@ -79,6 +84,10 @@ func TestStoreSeparatesControlAndHistoryAndKeepsOfflineRobots(t *testing.T) {
 	if err != nil || len(points) != 1 || len(points[0].Motors) != 1 || points[0].Motors[0].TorqueNm != 4.5 {
 		t.Fatalf("history not persisted: points=%+v err=%v", points, err)
 	}
+	fastPoints, err := reopened.FastMotorHistory(telemetry.Robot.UUID, sampleAt.Add(-time.Second), sampleAt.Add(time.Second), 100)
+	if err != nil || len(fastPoints) != 1 || len(fastPoints[0].Motors) != 1 || fastPoints[0].Motors[0].TorqueNm != 5.6 {
+		t.Fatalf("fast motor history not persisted: points=%+v err=%v", fastPoints, err)
+	}
 
 	if err := reopened.RemoveRobot(telemetry.Robot.UUID); err != nil {
 		t.Fatal(err)
@@ -89,6 +98,10 @@ func TestStoreSeparatesControlAndHistoryAndKeepsOfflineRobots(t *testing.T) {
 	points, err = reopened.History(telemetry.Robot.UUID, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), 100)
 	if err != nil || len(points) != 0 {
 		t.Fatalf("removed robot history remained: points=%+v err=%v", points, err)
+	}
+	fastPoints, err = reopened.FastMotorHistory(telemetry.Robot.UUID, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), 100)
+	if err != nil || len(fastPoints) != 0 {
+		t.Fatalf("removed fast motor history remained: points=%+v err=%v", fastPoints, err)
 	}
 }
 

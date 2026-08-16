@@ -18,6 +18,7 @@ const state = {
   publicHistory: [],
   publicHistoryRobot: null,
   publicHistoryLoading: false,
+  publicHistoryRequestID: 0,
   publicHistoryMode: 'host',
   publicHistoryMotor: '',
   publicHistoryMetric: 'torque_nm',
@@ -438,6 +439,17 @@ function syncPublicRoute() {
 }
 
 function renderPublicHistoryControls() {
+  const range = $('#public-history-range');
+  const fastScope = state.publicHistoryMode !== 'host';
+  const rangeScope = fastScope ? 'motors' : 'host';
+  const rangeOptions = fastScope
+    ? [['10', '10 秒'], ['60', '1 分钟']]
+    : [['1', '1 小时'], ['6', '6 小时'], ['12', '12 小时'], ['24', '1 天'], ['168', '7 天'], ['720', '30 天']];
+  if (range.dataset.scope !== rangeScope) {
+    range.innerHTML = rangeOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
+    range.value = fastScope ? '60' : '24';
+    range.dataset.scope = rangeScope;
+  }
   const motors = new Map();
   state.publicHistory.forEach((point) => (point.motors || []).forEach((motor) => motors.set(motor.id, motor.label || motor.id)));
   const motorSelect = $('#public-motor-select');
@@ -453,22 +465,29 @@ function renderPublicHistoryControls() {
 
 function setPublicHistoryMode(mode) {
   state.publicHistoryMode = mode;
+  state.publicHistory = [];
+  state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
   renderPublicHistoryControls();
-  drawPublicHistory(state.publicHistory);
+  const robot = selectedPublicRobot();
+  if (robot) loadPublicHistory(robot);
+  else drawPublicHistory(state.publicHistory);
 }
 
 async function loadPublicHistory(robot) {
-  if (!robot || state.publicHistoryLoading) return;
+  if (!robot) return;
+  const requestID = ++state.publicHistoryRequestID;
   state.publicHistoryLoading = true;
   state.publicHistoryDrawKey = '';
   $('#public-chart-grid').innerHTML = '';
   $('#public-history-empty').textContent = '正在读取历史采样…';
   $('#public-history-empty').classList.remove('hidden');
   try {
-    const hours = Number($('#public-history-range').value) || 24;
-    const data = await api(`/api/v1/robots/${encodeURIComponent(robot.id)}/history?hours=${hours}`);
-    if (state.selected !== robot.id) return;
+    const fastScope = state.publicHistoryMode !== 'host';
+    const range = Number($('#public-history-range').value) || (fastScope ? 60 : 24);
+    const query = fastScope ? `scope=motors&seconds=${range}` : `hours=${range}`;
+    const data = await api(`/api/v1/robots/${encodeURIComponent(robot.id)}/history?${query}`);
+    if (state.selected !== robot.id || requestID !== state.publicHistoryRequestID) return;
     state.publicHistory = data.points || [];
     state.publicHistoryRobot = robot.id;
     state.publicHistoryDrawKey = '';
@@ -477,7 +496,7 @@ async function loadPublicHistory(robot) {
   } catch (error) {
     $('#public-history-empty').textContent = error.message;
   } finally {
-    state.publicHistoryLoading = false;
+    if (requestID === state.publicHistoryRequestID) state.publicHistoryLoading = false;
     const selected = selectedPublicRobot();
     if (selected && selected.id !== robot.id) window.queueMicrotask(() => loadPublicHistory(selected));
   }

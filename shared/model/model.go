@@ -110,14 +110,32 @@ type BatterySpecification struct {
 }
 
 type MotorSnapshot struct {
-	Enabled                 bool         `json:"enabled"`
-	Source                  string       `json:"source"`
-	Topic                   string       `json:"topic"`
-	TopicOnline             bool         `json:"topic_online"`
-	PerMotorOnlineSupported bool         `json:"per_motor_online_supported"`
-	TemperatureSupported    bool         `json:"temperature_supported"`
-	SampledAt               time.Time    `json:"sampled_at,omitempty"`
-	Motors                  []MotorState `json:"items,omitempty"`
+	Enabled                 bool          `json:"enabled"`
+	Source                  string        `json:"source"`
+	Topic                   string        `json:"topic"`
+	TopicOnline             bool          `json:"topic_online"`
+	PerMotorOnlineSupported bool          `json:"per_motor_online_supported"`
+	TemperatureSupported    bool          `json:"temperature_supported"`
+	SampledAt               time.Time     `json:"sampled_at,omitempty"`
+	Motors                  []MotorState  `json:"items,omitempty"`
+	Samples                 []MotorSample `json:"samples,omitempty"`
+	SampleRateHz            float64       `json:"sample_rate_hz,omitempty"`
+}
+
+// MotorSample is a compact, short-window sample used for high-rate charts.
+// It deliberately omits driver metadata because that data is stable in the
+// latest MotorState and does not belong in every high-frequency frame.
+type MotorSample struct {
+	At     time.Time          `json:"at"`
+	Motors []MotorSampleState `json:"motors,omitempty"`
+}
+
+type MotorSampleState struct {
+	ID                string  `json:"id"`
+	Label             string  `json:"label,omitempty"`
+	PositionRad       float64 `json:"position_rad"`
+	VelocityRadPerSec float64 `json:"velocity_rad_per_sec"`
+	TorqueNm          float64 `json:"torque_nm"`
 }
 
 type MotorState struct {
