@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -107,6 +109,7 @@ func TestPublicRobotDataIsRedactedButManagementRequiresLogin(t *testing.T) {
 
 func TestPublicRobotStreamStartsWithRedactedSnapshot(t *testing.T) {
 	store := newTestStore(t)
+	sampleAt := time.Now().UTC()
 	if err := store.PutTelemetry(model.Telemetry{
 		SchemaVersion: model.SchemaVersion,
 		Robot: model.Robot{
@@ -114,6 +117,7 @@ func TestPublicRobotStreamStartsWithRedactedSnapshot(t *testing.T) {
 			Hostname: "m99", OS: "linux", Arch: "arm64",
 		},
 		AgentVersion: "20260814", CollectedAt: time.Now().UTC(),
+		Motors: &model.MotorSnapshot{SampleRateHz: 500, Samples: []model.MotorSample{{At: sampleAt, Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 8.5}}}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -148,6 +152,55 @@ func TestPublicRobotStreamStartsWithRedactedSnapshot(t *testing.T) {
 		if strings.Contains(string(message), sensitive) {
 			t.Fatalf("public stream exposed %q: %s", sensitive, message)
 		}
+	}
+	record, ok := store.Robot("52446a60-7483-4ba7-b8c7-b85f60b2a00f")
+	if !ok {
+		t.Fatal("stored robot not found")
+	}
+	var liveEvent struct {
+		Type  string       `json:"type"`
+		Robot *PublicRobot `json:"robot"`
+	}
+	if err := json.Unmarshal(server.publicRobotEvent(record), &liveEvent); err != nil {
+		t.Fatal(err)
+	}
+	if liveEvent.Robot == nil || liveEvent.Robot.MotorSampleRateHz != 500 || len(liveEvent.Robot.MotorSamples) != 1 || liveEvent.Robot.MotorSamples[0].Motors[0].TorqueNm != 8.5 {
+		t.Fatalf("live event omitted complete motor batch: %+v", liveEvent)
+	}
+}
+
+func TestTelemetryAcceptsGzipMotorBatch(t *testing.T) {
+	store := newTestStore(t)
+	server := NewServer(ServerConfig{AgentToken: "agent-token-long-enough-for-tests", AdminUser: "admin", JWTSecret: "jwt-secret-long-enough-for-tests-123456"}, store)
+	sampleAt := time.Now().UTC()
+	telemetry := model.Telemetry{
+		SchemaVersion: model.SchemaVersion,
+		Robot:         model.Robot{UUID: "52446a60-7483-4ba7-b8c7-b85f60b2a00f", Code: "M99"},
+		CollectedAt:   sampleAt,
+		Motors: &model.MotorSnapshot{SampleRateHz: 500, Samples: []model.MotorSample{
+			{At: sampleAt, Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 1.5}}},
+			{At: sampleAt.Add(2 * time.Millisecond), Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 2.5}}},
+		}},
+	}
+	var body bytes.Buffer
+	compressed := gzip.NewWriter(&body)
+	if err := json.NewEncoder(compressed).Encode(telemetry); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/telemetry", bytes.NewReader(body.Bytes()))
+	request.Header.Set("Authorization", "Bearer agent-token-long-enough-for-tests")
+	request.Header.Set("Content-Encoding", "gzip")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("gzip telemetry status=%d body=%s", response.Code, response.Body.String())
+	}
+	points, err := store.FastMotorHistory(telemetry.Robot.UUID, sampleAt.Add(-time.Second), sampleAt.Add(time.Second), 30_000)
+	if err != nil || len(points) != 2 || points[1].Motors[0].TorqueNm != 2.5 {
+		t.Fatalf("gzip batch was not stored intact: points=%+v err=%v", points, err)
 	}
 }
 

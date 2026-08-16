@@ -105,6 +105,51 @@ func TestStoreSeparatesControlAndHistoryAndKeepsOfflineRobots(t *testing.T) {
 	}
 }
 
+func TestStoreRoundTripsComplete500HzMotorBatch(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root+"/control", root+"/history", StoreOptions{AdminUser: "admin", BootstrapPassword: "Baize@Admin1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	startedAt := time.Now().UTC().Add(-2 * time.Second)
+	samples := make([]model.MotorSample, 1000)
+	for sampleIndex := range samples {
+		motors := make([]model.MotorSampleState, 32)
+		for motorIndex := range motors {
+			motors[motorIndex] = model.MotorSampleState{ID: "motor", PositionRad: float64(sampleIndex), VelocityRadPerSec: float64(motorIndex), TorqueNm: float64(sampleIndex+motorIndex) + 0.25}
+		}
+		samples[sampleIndex] = model.MotorSample{At: startedAt.Add(time.Duration(sampleIndex) * 2 * time.Millisecond), Motors: motors}
+	}
+	telemetry := model.Telemetry{
+		SchemaVersion: model.SchemaVersion,
+		Robot:         model.Robot{UUID: "52446a60-7483-4ba7-b8c7-b85f60b2a00f", Code: "M99"},
+		CollectedAt:   time.Now().UTC(),
+		Motors:        &model.MotorSnapshot{SampleRateHz: 500, Samples: samples},
+	}
+	if err := store.PutTelemetry(telemetry); err != nil {
+		t.Fatal(err)
+	}
+	points, err := store.FastMotorHistory(telemetry.Robot.UUID, startedAt.Add(-time.Millisecond), time.Now().UTC().Add(time.Second), 32_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 1000 {
+		t.Fatalf("500Hz batch point count=%d, want 1000", len(points))
+	}
+	if len(points[999].Motors) != 32 || points[999].Motors[31].TorqueNm != 1030.25 {
+		t.Fatalf("500Hz batch last point was not preserved: %+v", points[999])
+	}
+	var batches, sampleCount int
+	if err := store.history.QueryRow(`SELECT COUNT(*), COALESCE(SUM(sample_count), 0) FROM motor_sample_batches WHERE robot_uuid = ?`, telemetry.Robot.UUID).Scan(&batches, &sampleCount); err != nil {
+		t.Fatal(err)
+	}
+	if batches != 1 || sampleCount != 1000 {
+		t.Fatalf("motor history was not stored as one batch: batches=%d samples=%d", batches, sampleCount)
+	}
+}
+
 func TestAdminBootstrapPasswordRequiresChange(t *testing.T) {
 	store := newTestStore(t)
 	valid, required, err := store.AuthenticateAdmin("admin", "Baize@Admin1")

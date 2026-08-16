@@ -76,7 +76,7 @@ func TestMotorCollectorStreamsFastSamples(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	ros2 := []byte("#!/bin/sh\nprintf '%s\\n' 'name: [hip]' 'position: [1.5]' 'velocity: [2.5]' 'effort: [3.5]' '---'\nsleep 0.06\nprintf '%s\\n' 'name: [hip]' 'position: [1.6]' 'velocity: [2.6]' 'effort: [3.6]' '---'\nsleep 1\n")
+	ros2 := []byte("#!/bin/sh\nprintf '%s\\n' 'name: [hip]' 'position: [1.5]' 'velocity: [2.5]' 'effort: [3.5]' '---'\nsleep 0.001\nprintf '%s\\n' 'name: [hip]' 'position: [1.6]' 'velocity: [2.6]' 'effort: [3.6]' '---'\nsleep 1\n")
 	if err := os.WriteFile(filepath.Join(binDir, "ros2"), ros2, 0o750); err != nil {
 		t.Fatal(err)
 	}

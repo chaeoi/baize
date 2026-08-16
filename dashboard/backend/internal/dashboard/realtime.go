@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"baize/shared/model"
 	"github.com/gorilla/websocket"
 )
 
@@ -23,8 +24,9 @@ const (
 )
 
 var robotStreamUpgrader = websocket.Upgrader{
-	ReadBufferSize:  2048,
-	WriteBufferSize: 8192,
+	ReadBufferSize:    2048,
+	WriteBufferSize:   8192,
+	EnableCompression: true,
 	CheckOrigin: func(request *http.Request) bool {
 		origin := request.Header.Get("Origin")
 		if origin == "" {
@@ -36,8 +38,9 @@ var robotStreamUpgrader = websocket.Upgrader{
 }
 
 var publicRobotStreamUpgrader = websocket.Upgrader{
-	ReadBufferSize:  2048,
-	WriteBufferSize: 8192,
+	ReadBufferSize:    2048,
+	WriteBufferSize:   8192,
+	EnableCompression: true,
 	// This stream contains the same deliberately redacted data as the public REST API.
 	CheckOrigin: func(*http.Request) bool { return true },
 }
@@ -45,14 +48,16 @@ var publicRobotStreamUpgrader = websocket.Upgrader{
 // PublicRobot deliberately contains no UUID, hostname, OS, architecture, or
 // collection configuration. Those fields are available only to an admin stream.
 type PublicRobot struct {
-	ID          string        `json:"id"`
-	Code        string        `json:"code"`
-	Model       string        `json:"model"`
-	Remark      string        `json:"remark,omitempty"`
-	Online      bool          `json:"online"`
-	LastSeen    time.Time     `json:"last_seen"`
-	CollectedAt time.Time     `json:"collected_at"`
-	Summary     PublicSummary `json:"summary"`
+	ID                string              `json:"id"`
+	Code              string              `json:"code"`
+	Model             string              `json:"model"`
+	Remark            string              `json:"remark,omitempty"`
+	Online            bool                `json:"online"`
+	LastSeen          time.Time           `json:"last_seen"`
+	CollectedAt       time.Time           `json:"collected_at"`
+	Summary           PublicSummary       `json:"summary"`
+	MotorSamples      []model.MotorSample `json:"motor_samples,omitempty"`
+	MotorSampleRateHz float64             `json:"motor_sample_rate_hz,omitempty"`
 }
 
 type PublicSummary struct {
@@ -159,6 +164,10 @@ func (hub *streamHub) broadcast(message []byte) {
 }
 
 func (s *Server) publicRobot(record RobotRecord) PublicRobot {
+	return s.publicRobotWithSamples(record, false)
+}
+
+func (s *Server) publicRobotWithSamples(record RobotRecord, includeSamples bool) PublicRobot {
 	telemetry := record.Telemetry
 	summary := PublicSummary{HasTelemetry: !telemetry.CollectedAt.IsZero(), DiagnosticCount: len(telemetry.Errors)}
 	if telemetry.System != nil {
@@ -197,11 +206,16 @@ func (s *Server) publicRobot(record RobotRecord) PublicRobot {
 		summary.MotorTopicOnline = telemetry.Motors.TopicOnline
 	}
 	collectedAt := telemetry.CollectedAt
-	return PublicRobot{
+	robot := PublicRobot{
 		ID: publicRobotID(s.config.JWTSecret, record.UUID), Code: record.Code, Model: record.Model,
 		Remark: record.Remark, Online: time.Since(record.LastSeen) <= onlineAfter,
 		LastSeen: record.LastSeen, CollectedAt: collectedAt, Summary: summary,
 	}
+	if includeSamples && telemetry.Motors != nil && len(telemetry.Motors.Samples) > 0 {
+		robot.MotorSamples = telemetry.Motors.Samples
+		robot.MotorSampleRateHz = telemetry.Motors.SampleRateHz
+	}
+	return robot
 }
 
 func publicRobotID(secret, uuid string) string {
@@ -228,7 +242,7 @@ func (s *Server) publicRobotSnapshot() []PublicRobot {
 
 func (s *Server) publicRobotEvent(record RobotRecord) []byte {
 	message, _ := json.Marshal(robotStreamEvent{Type: "robot", ServerTime: time.Now().UTC(), Robot: func() *PublicRobot {
-		robot := s.publicRobot(record)
+		robot := s.publicRobotWithSamples(record, true)
 		return &robot
 	}()})
 	return message

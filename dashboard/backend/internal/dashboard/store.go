@@ -127,7 +127,7 @@ func NewStore(dataDir, historyDir string, options StoreOptions) (*Store, error) 
 		_ = control.Close()
 		return nil, fmt.Errorf("open history database: %w", err)
 	}
-	store := &Store{dataDir: dataDir, historyDir: historyDir, control: control, history: history, robots: make(map[string]RobotRecord), historyEvery: options.HistorySampleInterval, historyKeep: options.HistoryRetention, fastHistoryKeep: 15 * time.Minute}
+	store := &Store{dataDir: dataDir, historyDir: historyDir, control: control, history: history, robots: make(map[string]RobotRecord), historyEvery: options.HistorySampleInterval, historyKeep: options.HistoryRetention, fastHistoryKeep: 2 * time.Minute}
 	if err := store.migrateSchema(); err != nil {
 		store.Close()
 		return nil, err
@@ -234,6 +234,17 @@ CREATE TABLE IF NOT EXISTS motor_samples (
   motors_json BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS motor_samples_robot_time_idx ON motor_samples(robot_uuid, received_at);`
+	fastBatchSchema := `
+CREATE TABLE IF NOT EXISTS motor_sample_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  robot_uuid TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER NOT NULL,
+  received_at INTEGER NOT NULL,
+  sample_count INTEGER NOT NULL,
+  samples_json BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS motor_sample_batches_robot_time_idx ON motor_sample_batches(robot_uuid, started_at, ended_at);`
 	if _, err := s.control.Exec(controlSchema); err != nil {
 		return fmt.Errorf("migrate control database: %w", err)
 	}
@@ -242,6 +253,9 @@ CREATE INDEX IF NOT EXISTS motor_samples_robot_time_idx ON motor_samples(robot_u
 	}
 	if _, err := s.history.Exec(fastHistorySchema); err != nil {
 		return fmt.Errorf("migrate fast motor history: %w", err)
+	}
+	if _, err := s.history.Exec(fastBatchSchema); err != nil {
+		return fmt.Errorf("migrate fast motor batch history: %w", err)
 	}
 	if err := ensureColumn(s.history, "telemetry_samples", "motors_json", "BLOB"); err != nil {
 		return fmt.Errorf("migrate motor history: %w", err)
@@ -662,6 +676,9 @@ func (s *Store) RemoveRobot(uuid string) error {
 	if _, err := s.history.Exec(`DELETE FROM motor_samples WHERE robot_uuid = ?`, uuid); err != nil {
 		return err
 	}
+	if _, err := s.history.Exec(`DELETE FROM motor_sample_batches WHERE robot_uuid = ?`, uuid); err != nil {
+		return err
+	}
 	delete(s.robots, uuid)
 	return nil
 }
@@ -804,26 +821,29 @@ func (s *Store) insertFastMotorHistory(uuid string, telemetry model.Telemetry, r
 	if telemetry.Motors == nil || len(telemetry.Motors.Samples) == 0 {
 		return nil
 	}
+	startedAt, endedAt := telemetry.Motors.Samples[0].At, telemetry.Motors.Samples[0].At
+	for _, sample := range telemetry.Motors.Samples[1:] {
+		if sample.At.Before(startedAt) {
+			startedAt = sample.At
+		}
+		if sample.At.After(endedAt) {
+			endedAt = sample.At
+		}
+	}
+	samplesJSON, err := encodeMotorSampleBatch(telemetry.Motors.Samples)
+	if err != nil {
+		return err
+	}
 	tx, err := s.history.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	for _, sample := range telemetry.Motors.Samples {
-		motors := make([]MotorHistoryPoint, len(sample.Motors))
-		for index, motor := range sample.Motors {
-			motors[index] = MotorHistoryPoint{ID: motor.ID, Label: motor.Label, PositionRad: motor.PositionRad, VelocityRadPerSec: motor.VelocityRadPerSec, TorqueNm: motor.TorqueNm}
-		}
-		motorsJSON, err := encodeMotorHistory(motors)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT INTO motor_samples(robot_uuid, at, received_at, motor_count, motors_json) VALUES(?, ?, ?, ?, ?)`, uuid, sample.At.UnixNano(), receivedAt.UnixNano(), len(motors), motorsJSON); err != nil {
-			return err
-		}
+	if _, err := tx.Exec(`INSERT INTO motor_sample_batches(robot_uuid, started_at, ended_at, received_at, sample_count, samples_json) VALUES(?, ?, ?, ?, ?, ?)`, uuid, startedAt.UnixNano(), endedAt.UnixNano(), receivedAt.UnixNano(), len(telemetry.Motors.Samples), samplesJSON); err != nil {
+		return err
 	}
 	cutoff := receivedAt.Add(-s.fastHistoryKeep).UnixNano()
-	if _, err := tx.Exec(`DELETE FROM motor_samples WHERE robot_uuid = ? AND received_at < ?`, uuid, cutoff); err != nil {
+	if _, err := tx.Exec(`DELETE FROM motor_sample_batches WHERE robot_uuid = ? AND received_at < ?`, uuid, cutoff); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -912,32 +932,38 @@ func (s *Store) History(uuid string, from, to time.Time, limit int) ([]HistoryPo
 func (s *Store) FastMotorHistory(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if limit <= 0 || limit > 5000 {
-		limit = 2000
+	if limit <= 0 || limit > 64_000 {
+		limit = 32_000
 	}
-	rows, err := s.history.Query(`SELECT at, motor_count, motors_json FROM (SELECT at, motor_count, motors_json FROM motor_samples WHERE robot_uuid = ? AND at >= ? AND at <= ? ORDER BY at DESC LIMIT ?) ORDER BY at ASC`, uuid, from.UnixNano(), to.UnixNano(), limit)
+	rows, err := s.history.Query(`SELECT samples_json FROM motor_sample_batches WHERE robot_uuid = ? AND ended_at >= ? AND started_at <= ? ORDER BY started_at ASC`, uuid, from.UnixNano(), to.UnixNano())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	points := make([]HistoryPoint, 0)
 	for rows.Next() {
-		var point HistoryPoint
-		var at int64
-		var motorCount int
-		var motorsJSON []byte
-		if err := rows.Scan(&at, &motorCount, &motorsJSON); err != nil {
+		var samplesJSON []byte
+		if err := rows.Scan(&samplesJSON); err != nil {
 			return nil, err
 		}
-		point.At = unixNano(at)
-		point.MotorCount = motorCount
-		point.MotorTopicOnline = true
-		if err := decodeMotorHistory(motorsJSON, &point.Motors); err != nil {
-			return nil, fmt.Errorf("decode fast motor history: %w", err)
+		batch, err := decodeMotorSampleBatch(samplesJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode fast motor batch history: %w", err)
 		}
-		points = append(points, point)
+		for _, point := range batch {
+			if !point.At.Before(from) && !point.At.After(to) {
+				points = append(points, point)
+			}
+		}
 	}
-	return points, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(points, func(i, j int) bool { return points[i].At.Before(points[j].At) })
+	if len(points) > limit {
+		points = points[len(points)-limit:]
+	}
+	return points, nil
 }
 
 type compactMotorHistory struct {
@@ -946,6 +972,67 @@ type compactMotorHistory struct {
 	Position float64 `json:"p"`
 	Velocity float64 `json:"v"`
 	Torque   float64 `json:"t"`
+}
+
+type compactMotorSample struct {
+	At     int64                 `json:"a"`
+	Motors []compactMotorHistory `json:"m,omitempty"`
+}
+
+func encodeMotorSampleBatch(samples []model.MotorSample) ([]byte, error) {
+	compact := make([]compactMotorSample, len(samples))
+	for index, sample := range samples {
+		motors := make([]compactMotorHistory, len(sample.Motors))
+		for motorIndex, motor := range sample.Motors {
+			motors[motorIndex] = compactMotorHistory{ID: motor.ID, Label: motor.Label, Position: motor.PositionRad, Velocity: motor.VelocityRadPerSec, Torque: motor.TorqueNm}
+		}
+		compact[index] = compactMotorSample{At: sample.At.UnixNano(), Motors: motors}
+	}
+	data, err := json.Marshal(compact)
+	if err != nil {
+		return nil, err
+	}
+	var buffer bytes.Buffer
+	writer, err := zlib.NewWriterLevel(&buffer, zlib.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := writer.Write(data); err != nil {
+		_ = writer.Close()
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func decodeMotorSampleBatch(data []byte) ([]HistoryPoint, error) {
+	reader, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := io.ReadAll(io.LimitReader(reader, 64<<20))
+	closeErr := reader.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	var compact []compactMotorSample
+	if err := json.Unmarshal(decoded, &compact); err != nil {
+		return nil, err
+	}
+	points := make([]HistoryPoint, len(compact))
+	for index, sample := range compact {
+		motors := make([]MotorHistoryPoint, len(sample.Motors))
+		for motorIndex, motor := range sample.Motors {
+			motors[motorIndex] = MotorHistoryPoint{ID: motor.ID, Label: motor.Label, PositionRad: motor.Position, VelocityRadPerSec: motor.Velocity, TorqueNm: motor.Torque}
+		}
+		points[index] = HistoryPoint{At: unixNano(sample.At), MotorCount: len(motors), MotorTopicOnline: true, Motors: motors}
+	}
+	return points, nil
 }
 
 func encodeMotorHistory(motors []MotorHistoryPoint) ([]byte, error) {

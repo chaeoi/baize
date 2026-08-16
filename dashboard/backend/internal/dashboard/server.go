@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -31,8 +33,10 @@ import (
 )
 
 const (
-	maxTelemetryBytes = 4 << 20
-	maxReleaseBytes   = 128 << 20
+	maxTelemetryBytes           = 32 << 20
+	maxCompressedTelemetryBytes = 16 << 20
+	maxReleaseBytes             = 128 << 20
+	fastMotorHistoryLimit       = 32_000
 )
 
 var (
@@ -243,7 +247,7 @@ func (s *Server) telemetry(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var telemetry model.Telemetry
-	if err := decodeJSON(writer, request, &telemetry, maxTelemetryBytes); err != nil {
+	if err := decodeTelemetryJSON(writer, request, &telemetry); err != nil {
 		return
 	}
 	if telemetry.SchemaVersion != model.SchemaVersion || !uuidPattern.MatchString(telemetry.Robot.UUID) || telemetry.Robot.Code == "" {
@@ -361,7 +365,7 @@ func (s *Server) publicRobotAction(writer http.ResponseWriter, request *http.Req
 	var points []HistoryPoint
 	var err error
 	if scope == "motors" {
-		points, err = s.store.FastMotorHistory(uuid, from, to, 5000)
+		points, err = s.store.FastMotorHistory(uuid, from, to, fastMotorHistoryLimit)
 	} else {
 		points, err = s.store.History(uuid, from, to, 5000)
 	}
@@ -516,7 +520,7 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 		var points []HistoryPoint
 		var err error
 		if scope == "motors" {
-			points, err = s.store.FastMotorHistory(uuid, from, to, 5000)
+			points, err = s.store.FastMotorHistory(uuid, from, to, fastMotorHistoryLimit)
 		} else {
 			points, err = s.store.History(uuid, from, to, 5000)
 		}
@@ -786,7 +790,35 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, limit int64) error {
 	request.Body = http.MaxBytesReader(writer, request.Body, limit)
-	decoder := json.NewDecoder(request.Body)
+	return decodeJSONReader(writer, request.Body, target)
+}
+
+func decodeTelemetryJSON(writer http.ResponseWriter, request *http.Request, target any) error {
+	if strings.EqualFold(strings.TrimSpace(request.Header.Get("Content-Encoding")), "gzip") {
+		request.Body = http.MaxBytesReader(writer, request.Body, maxCompressedTelemetryBytes)
+		compressed, err := gzip.NewReader(request.Body)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid gzip telemetry")
+			return err
+		}
+		defer compressed.Close()
+		data, err := io.ReadAll(io.LimitReader(compressed, maxTelemetryBytes+1))
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid telemetry body")
+			return err
+		}
+		if int64(len(data)) > maxTelemetryBytes {
+			err := errors.New("telemetry body is too large")
+			writeError(writer, http.StatusRequestEntityTooLarge, err.Error())
+			return err
+		}
+		return decodeJSONReader(writer, bytes.NewReader(data), target)
+	}
+	return decodeJSON(writer, request, target, maxTelemetryBytes)
+}
+
+func decodeJSONReader(writer http.ResponseWriter, reader io.Reader, target any) error {
+	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		writeError(writer, http.StatusBadRequest, "invalid JSON: "+err.Error())
