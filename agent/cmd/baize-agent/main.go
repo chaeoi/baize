@@ -17,16 +17,43 @@ import (
 	"baize/agent/internal/agent"
 	"baize/agent/internal/collector"
 	"baize/agent/internal/config"
+	"baize/agent/internal/service"
 	"baize/shared/model"
 )
 
 var version = "dev"
 
 func main() {
-	configPath := flag.String("config", "/opt/baize/agent/config.yml", "Agent configuration file")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	checkConfig := flag.Bool("check-config", false, "validate configuration and built-in robot model, then exit")
-	flag.Parse()
+	if len(os.Args) > 1 && os.Args[1] == "service" {
+		executablePath, err := os.Executable()
+		if err != nil {
+			slog.Error("resolve executable path", "error", err)
+			os.Exit(1)
+		}
+		if err := service.Execute(os.Args[2:], executablePath); err != nil {
+			slog.Error("service command", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+	flags := flag.NewFlagSet("baize-agent", flag.ExitOnError)
+	flags.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: baize-agent [run] [options]")
+		fmt.Fprintln(os.Stderr, "       baize-agent service <install|uninstall|status>")
+		flags.PrintDefaults()
+	}
+	configPath := flags.String("config", "/opt/baize/agent/config.yml", "Agent configuration file")
+	showVersion := flags.Bool("version", false, "print version and exit")
+	checkConfig := flags.Bool("check-config", false, "validate configuration and built-in robot model, then exit")
+	arguments := os.Args[1:]
+	if len(arguments) > 0 && arguments[0] == "run" {
+		arguments = arguments[1:]
+	}
+	flags.Parse(arguments)
+	if flags.NArg() != 0 {
+		slog.Error("unknown command", "command", flags.Arg(0))
+		os.Exit(2)
+	}
 	if *showVersion {
 		fmt.Println(version)
 		return

@@ -17,6 +17,7 @@ import (
 type Duration time.Duration
 
 func (d Duration) Value() time.Duration { return time.Duration(d) }
+func (d Duration) String() string       { return time.Duration(d).String() }
 
 func (d *Duration) UnmarshalJSON(data []byte) error {
 	var value string

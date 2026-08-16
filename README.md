@@ -49,9 +49,20 @@ JWT 密钥不写入 YAML，而是保存在 control DB。
 ## Agent
 
 GitHub Actions 构建 Linux AMD64/ARM64 静态 Agent；机器人只下载经 SHA-256 校验
-的 Release 二进制。安装器会生成由 root 所有、仅 Agent 服务账户可读的 `/opt/baize/agent/config.yml`，其中
-包含机器人身份、Dashboard 凭据和 `robot_model`。topic、电机清单、电池 ROS2
-消息格式均由二进制内置 profile 决定，配置文件不能覆盖。
+的 Release 二进制。Agent 自带服务安装器，`service install` 会把当前二进制安装到
+`/opt/baize/agent/baize-agent`，创建 systemd 单元，并生成由 root 所有、仅 Agent
+服务账户可读的 `/opt/baize/agent/config.yml`。topic、电机清单、电池 ROS2 消息格式
+均由二进制内置 profile 决定，配置文件不能覆盖。
+
+直接运行不带参数的安装命令会生成待填写的默认配置，但不会启动配置不完整的服务：
+
+```bash
+sudo ./baize-agent-linux-amd64 service install
+sudoedit /opt/baize/agent/config.yml
+sudo /opt/baize/agent/baize-agent service install
+```
+
+也可以在安装时一次传入完整配置，验证通过后服务会立即启动：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/install.sh | \
@@ -62,7 +73,19 @@ curl -fsSL https://raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/inst
   --robot-model 2m_v0.1.2
 ```
 
-未传 `--uuid` 时安装器生成永久 UUID。重新安装同一台机器人时显式传入原 UUID。
+下载脚本只负责选择架构、校验 Release，然后把安装参数传给
+`baize-agent service install`。指定 Release 可设置 `BAIZE_VERSION=v1.2.3`。
+未传 `--uuid` 时 Agent 生成永久 UUID；也支持 `--force-config`。安装参数只用于写入 `config.yml`，不会成为第二个
+运行时配置来源；已有有效配置默认保留，传入某个参数时只更新对应字段。`--force-config`
+用于从默认模板重新生成配置。可用以下命令查看状态或卸载服务；卸载保留二进制和配置，
+方便重新注册：
+
+```bash
+sudo /opt/baize/agent/baize-agent service install --uuid 7fd34256-bf3a-4cf6-8da0-fbce40f34d11
+sudo /opt/baize/agent/baize-agent service status
+sudo /opt/baize/agent/baize-agent service uninstall
+```
+
 支持的模型、ROS2 topic、关节标签与电机元数据均编入 Agent；不支持的型号会在
 安装校验阶段失败。Agent 仅通过不启用 ROS2 CLI daemon 的
 `ros2 topic echo --no-daemon --once` 读取：
