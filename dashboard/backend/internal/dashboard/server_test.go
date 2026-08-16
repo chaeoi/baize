@@ -117,7 +117,7 @@ func TestPublicRobotStreamStartsWithRedactedSnapshot(t *testing.T) {
 			Hostname: "m99", OS: "linux", Arch: "arm64",
 		},
 		AgentVersion: "20260814", CollectedAt: time.Now().UTC(),
-		Motors: &model.MotorSnapshot{SampleRateHz: 500, Samples: []model.MotorSample{{At: sampleAt, Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 8.5}}}}},
+		Motors: &model.MotorSnapshot{SampleRateHz: 500, Motors: []model.MotorState{{ID: "hip", Label: "左髋"}}, Samples: []model.MotorSample{{At: sampleAt, Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 8.5}}}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestPublicRobotStreamStartsWithRedactedSnapshot(t *testing.T) {
 	if err := json.Unmarshal(server.publicRobotEvent(record), &liveEvent); err != nil {
 		t.Fatal(err)
 	}
-	if liveEvent.Robot == nil || liveEvent.Robot.MotorSampleRateHz != 500 || len(liveEvent.Robot.MotorSamples) != 1 || liveEvent.Robot.MotorSamples[0].Motors[0].TorqueNm != 8.5 {
+	if liveEvent.Robot == nil || liveEvent.Robot.MotorSampleRateHz != 500 || len(liveEvent.Robot.MotorSamples) != 1 || liveEvent.Robot.MotorSamples[0].Motors[0].TorqueNm != 8.5 || liveEvent.Robot.MotorLabels["hip"] != "左髋" {
 		t.Fatalf("live event omitted complete motor batch: %+v", liveEvent)
 	}
 }

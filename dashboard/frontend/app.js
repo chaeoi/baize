@@ -68,7 +68,18 @@ function bindEvents() {
   $('#delete-robot-button').addEventListener('click', openDeleteRobot);
   $('#delete-robot-form').addEventListener('submit', deleteRobot);
   $('#history-range').addEventListener('change', loadHistory);
-  $('#public-history-range').addEventListener('change', () => loadPublicHistory(selectedPublicRobot()));
+  $('#public-history-range').addEventListener('change', () => {
+    const robot = selectedPublicRobot();
+    state.publicHistory = [];
+    state.publicHistoryRobot = null;
+    state.publicHistoryDrawKey = '';
+    if (!robot) return;
+    if (publicHistoryIsRealtime()) {
+      primePublicRealtimeHistory(robot);
+      renderPublicHistoryControls();
+      drawPublicHistory(state.publicHistory);
+    } else loadPublicHistory(robot);
+  });
   $('#public-metric-select').addEventListener('change', (event) => { state.publicHistoryMetric = event.target.value; state.publicHistoryDrawKey = ''; drawPublicHistory(state.publicHistory); });
   $('#public-motor-select').addEventListener('change', (event) => { state.publicHistoryMotor = event.target.value; state.publicHistoryDrawKey = ''; drawPublicHistory(state.publicHistory); });
   $$('[data-public-mode]').forEach((button) => button.addEventListener('click', () => setPublicHistoryMode(button.dataset.publicMode)));
@@ -284,7 +295,10 @@ function receiveEvent(event, mode) {
     const index = state.robots.findIndex((robot) => (mode === 'admin' ? robot.uuid : robot.id) === key);
     if (index === -1) state.robots.push(event.robot);
     else state.robots[index] = event.robot;
-    if (mode === 'public' && state.selected === event.robot.id) appendPublicMotorSamples(event.robot);
+    if (mode === 'public' && state.selected === event.robot.id) {
+      if (publicHistoryIsRealtime() && state.publicHistoryMode === 'host') appendPublicHostSample(event.robot);
+      if (state.publicHistoryMode !== 'host') appendPublicMotorSamples(event.robot);
+    }
   }
   if (event.server_time && $('#fleet-latency')) {
     const serverTime = Date.parse(event.server_time);
@@ -395,8 +409,12 @@ function renderPublicDetail(robot) {
     ['电池状态', battery?.online ? powerStatusLabel(battery.power_supply_status) : '未启用']
   ]);
   renderPublicHistoryControls(robot);
-  if (state.publicHistoryRobot !== robot.id && !state.publicHistoryLoading) loadPublicHistory(robot);
-  else drawPublicHistory(state.publicHistory);
+  if (publicHistoryIsRealtime()) {
+    primePublicRealtimeHistory(robot);
+    renderPublicHistoryControls();
+    drawPublicHistory(state.publicHistory);
+  } else if (state.publicHistoryRobot !== robot.id && !state.publicHistoryLoading) loadPublicHistory(robot);
+  else if (!state.publicHistoryLoading) drawPublicHistory(state.publicHistory);
 }
 
 function selectedPublicRobot() { return state.robots.find((robot) => robot.id === state.selected); }
@@ -413,6 +431,8 @@ function openPublicRobot(id) {
   state.publicHistory = [];
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
+  state.publicHistoryRequestID += 1;
+  state.publicHistoryLoading = false;
   window.history.pushState({}, '', `/robot/${encodeURIComponent(id)}`);
   render();
 }
@@ -422,6 +442,8 @@ function showFleet(replace = false) {
   state.publicHistory = [];
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
+  state.publicHistoryRequestID += 1;
+  state.publicHistoryLoading = false;
   if (replace) window.history.replaceState({}, '', '/');
   else window.history.pushState({}, '', '/');
   render();
@@ -435,6 +457,8 @@ function syncPublicRoute() {
     state.publicHistory = [];
     state.publicHistoryRobot = null;
     state.publicHistoryDrawKey = '';
+    state.publicHistoryRequestID += 1;
+    state.publicHistoryLoading = false;
   }
   render();
 }
@@ -444,11 +468,11 @@ function renderPublicHistoryControls() {
   const fastScope = state.publicHistoryMode !== 'host';
   const rangeScope = fastScope ? 'motors' : 'host';
   const rangeOptions = fastScope
-    ? [['10', '10 秒'], ['60', '1 分钟']]
-    : [['1', '1 小时'], ['6', '6 小时'], ['12', '12 小时'], ['24', '1 天'], ['168', '7 天'], ['720', '30 天']];
+    ? [['realtime', '实时'], ['10', '10 秒'], ['60', '1 分钟']]
+    : [['realtime', '实时'], ['1', '1 小时'], ['6', '6 小时'], ['12', '12 小时'], ['24', '1 天'], ['168', '7 天'], ['720', '30 天']];
   if (range.dataset.scope !== rangeScope) {
     range.innerHTML = rangeOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
-    range.value = fastScope ? '60' : '24';
+    range.value = 'realtime';
     range.dataset.scope = rangeScope;
   }
   const latestMotorPoint = [...state.publicHistory].reverse().find((point) => point.motors?.length);
@@ -471,31 +495,46 @@ function setPublicHistoryMode(mode) {
   state.publicHistoryDrawKey = '';
   renderPublicHistoryControls();
   const robot = selectedPublicRobot();
-  if (robot) loadPublicHistory(robot);
+  if (robot && publicHistoryIsRealtime()) {
+    primePublicRealtimeHistory(robot);
+    renderPublicHistoryControls();
+    drawPublicHistory(state.publicHistory);
+  } else if (robot) loadPublicHistory(robot);
   else drawPublicHistory(state.publicHistory);
 }
 
+function publicHistoryRange() { return $('#public-history-range')?.value || 'realtime'; }
+function publicHistoryIsRealtime() { return publicHistoryRange() === 'realtime'; }
+
 async function loadPublicHistory(robot) {
-  if (!robot) return;
+  if (!robot || publicHistoryIsRealtime()) {
+    if (robot) primePublicRealtimeHistory(robot);
+    return;
+  }
   const requestID = ++state.publicHistoryRequestID;
   state.publicHistoryLoading = true;
   state.publicHistoryDrawKey = '';
   $('#public-chart-grid').innerHTML = '';
-  $('#public-history-empty').textContent = '正在读取历史采样…';
-  $('#public-history-empty').classList.remove('hidden');
+  $('#public-history-empty').classList.add('hidden');
+  $('#public-chart-grid').innerHTML = '<div class="history-loading" aria-label="正在读取"><span></span></div>';
   try {
     const fastScope = state.publicHistoryMode !== 'host';
-    const range = Number($('#public-history-range').value) || (fastScope ? 60 : 24);
+    const range = Number(publicHistoryRange()) || (fastScope ? 60 : 24);
     const query = fastScope ? `scope=motors&seconds=${range}` : `hours=${range}`;
     const data = await api(`/api/v1/robots/${encodeURIComponent(robot.id)}/history?${query}`);
     if (state.selected !== robot.id || requestID !== state.publicHistoryRequestID) return;
     state.publicHistory = fastScope ? mergePublicMotorPoints(data.points || [], state.publicHistoryRobot === robot.id ? state.publicHistory : []) : (data.points || []);
     state.publicHistoryRobot = robot.id;
     state.publicHistoryDrawKey = '';
+    state.publicHistoryLoading = false;
     renderPublicHistoryControls();
     drawPublicHistory(state.publicHistory);
   } catch (error) {
-    $('#public-history-empty').textContent = error.message;
+    if (requestID === state.publicHistoryRequestID && state.selected === robot.id) {
+      $('#public-chart-grid').innerHTML = '';
+      $('#public-history-empty').textContent = error.message;
+      $('#public-history-empty').classList.remove('hidden');
+    }
   } finally {
     if (requestID === state.publicHistoryRequestID) state.publicHistoryLoading = false;
     const selected = selectedPublicRobot();
@@ -503,12 +542,12 @@ async function loadPublicHistory(robot) {
   }
 }
 
-function motorSamplesToPoints(samples) {
+function motorSamplesToPoints(samples, labels = {}) {
   return (samples || []).map((sample) => ({
     at: sample.at,
     motor_count: (sample.motors || []).length,
     motor_topic_online: true,
-    motors: sample.motors || [],
+    motors: (sample.motors || []).map((motor) => ({ ...motor, label: motor.label || labels[motor.id] || motor.id })),
   }));
 }
 
@@ -520,16 +559,54 @@ function mergePublicMotorPoints(fresh, existing = []) {
   });
   const points = [...byAt.values()].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
   if (!points.length) return [];
-  const seconds = Number($('#public-history-range')?.value) || 60;
+  const seconds = Number(publicHistoryRange()) || 60;
   const cutoff = Date.parse(points.at(-1).at) - seconds * 1000;
   const visible = points.filter((point) => Date.parse(point.at) >= cutoff);
   const maxPoints = 500 * seconds + 2000;
   return visible.length > maxPoints ? visible.slice(-maxPoints) : visible;
 }
 
+function primePublicRealtimeHistory(robot) {
+  if (!robot || state.publicHistoryMode !== 'host' || !publicHistoryIsRealtime()) {
+    if (robot && state.publicHistoryMode !== 'host' && publicHistoryIsRealtime()) appendPublicMotorSamples(robot);
+    return;
+  }
+  if (state.publicHistoryRobot !== robot.id) {
+    state.publicHistory = [];
+    state.publicHistoryRobot = robot.id;
+  }
+  appendPublicHostSample(robot);
+}
+
+function appendPublicHostSample(robot) {
+  if (!robot || state.publicHistoryMode !== 'host' || !publicHistoryIsRealtime()) return;
+  const summary = robot.summary || {};
+  if (!summary.has_telemetry) return;
+  const battery = summary.battery?.online ? summary.battery : null;
+  const gpu = summary.gpu;
+  const at = robot.collected_at || robot.last_seen;
+  const point = {
+    at,
+    cpu_percent: summary.cpu_percent,
+    memory_percent: summary.memory_percent,
+    disk_percent: summary.disk_percent,
+    load_1: summary.load_1,
+    temperature_max: summary.temperature_max,
+    gpu_utilization_percent: gpu?.utilization_percent,
+    battery_soc_percent: battery?.soc_percent,
+    battery_voltage: battery?.voltage,
+    battery_current: battery?.current,
+    battery_power_watts: battery?.power_watts,
+    battery_temperature: battery?.temperature,
+  };
+  state.publicHistory = mergePublicMotorPoints([point], state.publicHistoryRobot === robot.id ? state.publicHistory : []);
+  state.publicHistoryRobot = robot.id;
+  state.publicHistoryDrawKey = '';
+}
+
 function appendPublicMotorSamples(robot) {
   if (state.publicHistoryMode === 'host' || !robot?.motor_samples?.length) return;
-  const points = motorSamplesToPoints(robot.motor_samples);
+  const points = motorSamplesToPoints(robot.motor_samples, robot.motor_labels);
   state.publicHistory = mergePublicMotorPoints(points, state.publicHistoryRobot === robot.id ? state.publicHistory : []);
   state.publicHistoryRobot = robot.id;
   state.publicHistoryDrawKey = '';
@@ -693,8 +770,7 @@ function drawHistoryChart(points) {
   const available = points.filter((point) => [point.cpu_percent, point.memory_percent, point.battery_soc_percent].some((value) => Number.isFinite(Number(value))));
   $('#history-empty').classList.toggle('hidden', available.length > 1);
   if (available.length <= 1) {
-    $('#history-empty').textContent = '等待形成历史采样';
-    $('#history-meta').textContent = available.length ? '已有 1 个采样点' : '暂无历史采样';
+    $('#history-empty').textContent = '暂无历史数据';
     return;
   }
   const bounds = canvas.parentElement.getBoundingClientRect();
@@ -739,19 +815,18 @@ function drawHistoryChart(points) {
   context.fillText(first.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }), padding.left, height - 7);
   const lastLabel = last.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   context.fillText(lastLabel, width - padding.right - context.measureText(lastLabel).width, height - 7);
-  $('#history-meta').textContent = `${available.length} 个采样点 · ${relativeTime(available[available.length - 1].at)}更新`;
 }
 
 function drawPublicHistory(points) {
   const grid = $('#public-chart-grid');
   if (!grid || !selectedPublicRobot()) return;
-  const specs = publicChartSpecs(points).map((spec) => ({ ...spec, values: finiteSeriesValues(points, spec) })).filter((spec) => spec.values.length > 1);
+  const specs = publicChartSpecs(points).map((spec) => ({ ...spec, values: finiteSeriesValues(points, spec) })).filter((spec) => spec.values.length > 0);
   const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, points[0]?.at, points.at(-1)?.at, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width)]);
   if (drawKey === state.publicHistoryDrawKey && grid.childElementCount) return;
   const empty = $('#public-history-empty');
-  empty.classList.toggle('hidden', specs.length > 0);
+  empty.classList.toggle('hidden', specs.length > 0 || state.publicHistoryLoading);
   if (!specs.length) {
-    empty.textContent = points.length ? '当前维度暂无足够的历史采样' : '等待形成历史采样…';
+    empty.textContent = points.length ? '当前维度暂无可用数据' : (publicHistoryIsRealtime() ? '暂无实时数据' : '暂无历史数据');
     grid.innerHTML = '';
     state.publicHistoryDrawKey = drawKey;
     return;
@@ -805,7 +880,7 @@ function drawSingleMetricChart(canvas, spec) {
   const entries = spec.values || [];
   const values = entries.map((entry) => Number(entry.value));
   const finite = values.filter(Number.isFinite);
-  if (finite.length < 2) return;
+  if (!finite.length) return;
   const bounds = canvas.parentElement.getBoundingClientRect();
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
   const width = Math.max(260, Math.floor(bounds.width));
