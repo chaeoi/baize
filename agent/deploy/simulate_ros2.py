@@ -47,7 +47,7 @@ class BaizeSimulation(Node):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--motor-topic", default="/motor/q2w_upper_motor_joint_state")
-    parser.add_argument("--battery-topic", default="/bms_can/battery_data")
+    parser.add_argument("--battery-topic", default="/batcan/data")
     parser.add_argument("--rate", type=float, default=5.0)
     args = parser.parse_args()
 

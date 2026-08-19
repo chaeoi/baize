@@ -1,0 +1,65 @@
+# Embedded robot model catalogue. Each YAML document is one robot model.
+# The target machine selects exactly one model in agent/config.yml; there is no
+# automatic detection or runtime model-file lookup.
+---
+model:
+  id: 2m_v0.1.2
+
+motor:
+  enabled: true
+  topic: /motor/q2w_upper_motor_joint_state
+  message_type: sensor_msgs/msg/JointState
+  ros_setup:
+    - /opt/ros/humble/setup.bash
+  ros_environment:
+    ROS_LOCALHOST_ONLY: "1"
+  ros_user: ubuntu
+  read_timeout: 5s
+  fast_sample_rate_hz: 500
+  fast_buffer_seconds: 10
+  fast_batch_interval: 2s
+  joints:
+    motor_id_01: {label: waist_1, brand: drive-unit, model: model-01, can_interface: can0, control_mode: PT}
+    motor_id_02: {label: waist_2_virtual, brand: drive-unit, model: model-02, can_interface: can0, control_mode: PT, virtual_joint: true}
+    motor_id_03: {label: waist_3_virtual, brand: drive-unit, model: model-03, can_interface: can0, control_mode: PT, virtual_joint: true}
+    motor_id_04: {label: left_arm_1, brand: drive-unit, model: model-04, can_interface: can1, control_mode: CSP}
+    motor_id_05: {label: left_arm_2, brand: drive-unit, model: model-05, can_interface: can1, control_mode: CSP}
+    motor_id_06: {label: left_arm_3, brand: drive-unit, model: model-06, can_interface: can1, control_mode: CSP}
+    motor_id_07: {label: left_arm_4, brand: drive-unit, model: model-07, can_interface: can1, control_mode: CSP}
+    motor_id_08: {label: left_arm_5, brand: drive-unit, model: model-08, can_interface: can1, control_mode: CSP}
+    motor_id_09: {label: left_arm_6, brand: drive-unit, model: model-09, can_interface: can1, control_mode: CSP}
+    motor_id_10: {label: left_arm_7, brand: drive-unit, model: model-10, can_interface: can1, control_mode: CSP}
+    motor_id_11: {label: right_arm_1, brand: drive-unit, model: model-11, can_interface: can2, control_mode: CSP}
+    motor_id_12: {label: right_arm_2, brand: drive-unit, model: model-12, can_interface: can2, control_mode: CSP}
+    motor_id_13: {label: right_arm_3, brand: drive-unit, model: model-13, can_interface: can2, control_mode: CSP}
+    motor_id_14: {label: right_arm_4, brand: drive-unit, model: model-14, can_interface: can2, control_mode: CSP}
+    motor_id_15: {label: right_arm_5, brand: drive-unit, model: model-15, can_interface: can2, control_mode: CSP}
+    motor_id_16: {label: right_arm_6, brand: drive-unit, model: model-16, can_interface: can2, control_mode: CSP}
+    motor_id_17: {label: right_arm_7, brand: drive-unit, model: model-17, can_interface: can2, control_mode: CSP}
+    motor_id_18: {label: head_1, brand: drive-unit, model: model-18, can_interface: can0, control_mode: CSP}
+    motor_id_19: {label: head_2, brand: drive-unit, model: model-19, can_interface: can0, control_mode: CSP}
+    motor_id_20: {label: head_3, brand: drive-unit, model: model-20, can_interface: can0, control_mode: CSP}
+    motor_id_21: {label: left_leg_1, brand: drive-unit, model: model-21, can_interface: can3, control_mode: PT}
+    motor_id_22: {label: left_leg_2, brand: drive-unit, model: model-22, can_interface: can3, control_mode: PT}
+    motor_id_23: {label: left_leg_3, brand: drive-unit, model: model-23, can_interface: can3, control_mode: PT}
+    motor_id_24: {label: left_leg_4, brand: drive-unit, model: model-24, can_interface: can3, control_mode: PT}
+    motor_id_25: {label: left_ankle_virtual_1, brand: drive-unit, model: model-25, can_interface: can3, control_mode: PT, virtual_joint: true}
+    motor_id_26: {label: left_ankle_virtual_2, brand: drive-unit, model: model-26, can_interface: can3, control_mode: PT, virtual_joint: true}
+    motor_id_27: {label: right_leg_1, brand: drive-unit, model: model-27, can_interface: can4, control_mode: PT}
+    motor_id_28: {label: right_leg_2, brand: drive-unit, model: model-28, can_interface: can4, control_mode: PT}
+    motor_id_29: {label: right_leg_3, brand: drive-unit, model: model-29, can_interface: can4, control_mode: PT}
+    motor_id_30: {label: right_leg_4, brand: drive-unit, model: model-30, can_interface: can4, control_mode: PT}
+    motor_id_31: {label: right_ankle_virtual_1, brand: drive-unit, model: model-31, can_interface: can4, control_mode: PT, virtual_joint: true}
+    motor_id_32: {label: right_ankle_virtual_2, brand: drive-unit, model: model-32, can_interface: can4, control_mode: PT, virtual_joint: true}
+
+bms:
+  enabled: true
+  protocol: sensor_msgs_battery_state
+  topic: /batcan/data
+  message_type: sensor_msgs/msg/BatteryState
+  ros_setup:
+    - /opt/ros/humble/setup.bash
+  ros_environment:
+    ROS_LOCALHOST_ONLY: "1"
+  ros_user: ubuntu
+  read_timeout: 5s

@@ -17,6 +17,7 @@ COPY dashboard/backend/cmd/baize ./dashboard/backend/cmd/baize
 COPY dashboard/backend/internal/config ./dashboard/backend/internal/config
 COPY dashboard/backend/internal/dashboard ./dashboard/backend/internal/dashboard
 COPY shared/model ./shared/model
+COPY shared/robotmodel ./shared/robotmodel
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/baize ./dashboard/backend/cmd/baize
 
 FROM ${RUNTIME_IMAGE}

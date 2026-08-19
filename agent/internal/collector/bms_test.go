@@ -25,7 +25,7 @@ present: true
 }
 
 func TestPowerStatus(t *testing.T) {
-	if powerStatus(1) != "charging" || powerStatus(99) != "unknown" {
+	if powerStatus(1) != "charging" || powerStatus(3) != "not_charging" || powerStatus(99) != "unknown" {
 		t.Fatal("unexpected power status mapping")
 	}
 }

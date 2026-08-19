@@ -10,7 +10,8 @@ SQLite 数据库 `/data/control/control.db`；监控历史保存在嵌入式 Vic
 默认保留 90 天；500 Hz 电机原始位置、速度和转矩写入独立的 `motor` 时间序列，默认保留
 2 分钟。长周期查询会覆盖完整时间范围降采样，短窗口电机查询保留原始采样点。
 
-型号能力随 GitHub Release 编入二进制：Agent 只读取 ROS2 状态话题，BMS CAN
+型号能力维护在 `shared/robotmodel/models.yml` 的单文件 YAML catalogue 中，GitHub
+构建时同时嵌入 Agent 二进制和 Dashboard Docker：Agent 只读取 ROS2 状态话题，BMS CAN
 查询由独立的 [`batcan`](https://github.com/chaeoi/batcan) 服务负责。部署仍使用
 `config.yml` 管理监听地址、身份和通用采集策略，但不允许通过 YAML 修改型号 profile。
 
@@ -54,6 +55,17 @@ GitHub Actions 构建 Linux AMD64/ARM64 静态 Agent；机器人只下载经 SHA
 服务账户可读的 `/opt/baize/agent/config.yml`。topic、电机清单、电池 ROS2 消息格式
 均由二进制内置 profile 决定，配置文件不能覆盖。
 
+现场配置用顶层 `model` 选择一个型号，型号文件不会复制到机器人：
+
+```yaml
+model: "2m_v0.1.2"
+agent:
+  uuid: "..."
+  robot_code: "M99"
+  dashboard_url: "https://baize.example.com"
+  token: "..."
+```
+
 直接运行不带参数的安装命令会生成待填写的默认配置，但不会启动配置不完整的服务：
 
 ```bash
@@ -91,13 +103,17 @@ sudo /opt/baize/agent/baize-agent service uninstall
 `ros2 topic echo --no-daemon --once` 读取：
 
 - 电机：`/motor/q2w_upper_motor_joint_state`，`sensor_msgs/msg/JointState`
-- 电池：`/bms_can/battery_data`，`sensor_msgs/msg/BatteryState`
+- 电池：`/batcan/data`，`sensor_msgs/msg/BatteryState`
 
 电池 topic 由独立 BMS 服务发布：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chaeoi/batcan/main/deploy/install.sh | \
-  sudo sh -s -- --robot-model 2m_v0.1.2
+  sudo sh -s --
+sudoedit /opt/batcan/config.yml
+# 2m_v0.1.2 对应当前 Batcan 的 KVMS profile：
+# profile: 98b8d1c1-6a34-45a4-9687-e9a09ef20204
+sudo systemctl enable --now batcan
 ```
 
 ## 本地联调
