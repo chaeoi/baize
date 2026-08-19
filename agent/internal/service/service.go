@@ -449,15 +449,15 @@ func defaultConfig(uuid string) string {
 		lines.WriteString(model)
 		lines.WriteByte('\n')
 	}
-	lines.WriteString("agent:\n  uuid: ")
+	lines.WriteString("model: \"\"\n\nagent:\n  uuid: ")
 	lines.WriteString(yamlString(uuid))
-	lines.WriteString("\n  robot_code: \"\"\n  robot_model: \"\"\n  dashboard_url: \"\"\n  token: \"\"\n  report_interval: \"2s\"\n  http_timeout: \"10s\"\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  automatic: true\n  check_interval: \"1m\"\n")
+	lines.WriteString("\n  robot_code: \"\"\n  dashboard_url: \"\"\n  token: \"\"\n  report_interval: \"2s\"\n  http_timeout: \"10s\"\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  automatic: true\n  check_interval: \"1m\"\n")
 	return lines.String()
 }
 
 func renderConfig(agent config.AgentConfig) string {
-	return fmt.Sprintf("agent:\n  uuid: %s\n  robot_code: %s\n  robot_model: %s\n  dashboard_url: %s\n  token: %s\n  report_interval: %s\n  http_timeout: %s\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  automatic: true\n  check_interval: \"1m\"\n",
-		yamlString(agent.UUID), yamlString(agent.RobotCode), yamlString(agent.RobotModel), yamlString(agent.DashboardURL), yamlString(agent.Token), yamlString(agent.ReportInterval.String()), yamlString(agent.HTTPTimeout.String()))
+	return fmt.Sprintf("model: %s\n\nagent:\n  uuid: %s\n  robot_code: %s\n  dashboard_url: %s\n  token: %s\n  report_interval: %s\n  http_timeout: %s\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  automatic: true\n  check_interval: \"1m\"\n",
+		yamlString(agent.RobotModel), yamlString(agent.UUID), yamlString(agent.RobotCode), yamlString(agent.DashboardURL), yamlString(agent.Token), yamlString(agent.ReportInterval.String()), yamlString(agent.HTTPTimeout.String()))
 }
 
 func yamlString(value string) string {

@@ -34,11 +34,7 @@ func NewBMSCollector(cfg config.BMSConfig) *BMSCollector {
 // Collect reads the standard BatteryState topic once. The Agent never opens a
 // CAN socket and never publishes or sends a command on behalf of the bridge.
 func (c *BMSCollector) Collect(ctx context.Context) (model.BMSMetrics, error) {
-	metrics := model.BMSMetrics{Enabled: true, Protocol: c.config.Protocol, Interface: c.config.ROSTopic, Specification: model.BatterySpecification{
-		Vendor: c.config.Specification.Vendor, PackModel: c.config.Specification.PackModel,
-		Chemistry: c.config.Specification.Chemistry, NominalVoltage: c.config.Specification.NominalVoltage,
-		CapacityAh: c.config.Specification.CapacityAh, SeriesCells: c.config.Specification.SeriesCells,
-	}}
+	metrics := model.BMSMetrics{Enabled: true, Protocol: c.config.Protocol, Interface: c.config.ROSTopic}
 	readCtx, cancel := context.WithTimeout(ctx, c.config.ReadTimeout.Value())
 	defer cancel()
 	command, err := rosCommand(c.config.ROSSetup, c.config.ROSEnvironment, c.config.ROSUser,
@@ -76,6 +72,7 @@ func decodeBatteryState(output []byte, metrics model.BMSMetrics) (model.BMSMetri
 	metrics.SOCPercent = percentage
 	metrics.PowerWatts = message.Voltage * message.Current
 	metrics.PowerSupplyStatus = powerStatus(message.PowerSupplyStatus)
+	metrics.Present = message.Present
 	metrics.LastFrameAt = time.Now().UTC()
 	metrics.Online = true
 	return metrics, nil
@@ -83,12 +80,14 @@ func decodeBatteryState(output []byte, metrics model.BMSMetrics) (model.BMSMetri
 
 func powerStatus(value uint8) string {
 	switch value {
-	case 0:
-		return "not_charging"
 	case 1:
 		return "charging"
 	case 2:
 		return "discharging"
+	case 3:
+		return "not_charging"
+	case 4:
+		return "full"
 	default:
 		return "unknown"
 	}

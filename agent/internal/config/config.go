@@ -98,24 +98,14 @@ type MotorDefinition struct {
 }
 
 type BMSConfig struct {
-	Enabled        bool                 `json:"enabled" yaml:"enabled"`
-	Protocol       string               `json:"protocol" yaml:"protocol"`
-	ROSTopic       string               `json:"ros_topic" yaml:"ros_topic"`
-	ROSMessageType string               `json:"ros_message_type" yaml:"ros_message_type"`
-	ROSSetup       []string             `json:"ros_setup" yaml:"ros_setup"`
-	ROSEnvironment map[string]string    `json:"ros_environment" yaml:"ros_environment"`
-	ROSUser        string               `json:"ros_user" yaml:"ros_user"`
-	ReadTimeout    Duration             `json:"read_timeout" yaml:"read_timeout"`
-	Specification  BatterySpecification `json:"specification" yaml:"specification"`
-}
-
-type BatterySpecification struct {
-	Vendor         string  `json:"vendor" yaml:"vendor"`
-	PackModel      string  `json:"pack_model" yaml:"pack_model"`
-	Chemistry      string  `json:"chemistry" yaml:"chemistry"`
-	NominalVoltage float64 `json:"nominal_voltage" yaml:"nominal_voltage"`
-	CapacityAh     float64 `json:"capacity_ah" yaml:"capacity_ah"`
-	SeriesCells    int     `json:"series_cells" yaml:"series_cells"`
+	Enabled        bool              `json:"enabled" yaml:"enabled"`
+	Protocol       string            `json:"protocol" yaml:"protocol"`
+	ROSTopic       string            `json:"ros_topic" yaml:"ros_topic"`
+	ROSMessageType string            `json:"ros_message_type" yaml:"ros_message_type"`
+	ROSSetup       []string          `json:"ros_setup" yaml:"ros_setup"`
+	ROSEnvironment map[string]string `json:"ros_environment" yaml:"ros_environment"`
+	ROSUser        string            `json:"ros_user" yaml:"ros_user"`
+	ReadTimeout    Duration          `json:"read_timeout" yaml:"read_timeout"`
 }
 
 type UpdateConfig struct {
@@ -125,12 +115,23 @@ type UpdateConfig struct {
 }
 
 // fileConfig deliberately excludes motor and BMS sections. Robot capability is
-// selected by agent.robot_model and compiled into the Agent release.
+// selected by the single top-level model field and compiled into the Agent
+// release from the shared robot model catalogue.
 type fileConfig struct {
-	Agent  AgentConfig   `yaml:"agent"`
-	System *SystemConfig `yaml:"system"`
-	GPU    *GPUConfig    `yaml:"gpu"`
-	Update *UpdateConfig `yaml:"update"`
+	Model  string          `yaml:"model"`
+	Agent  fileAgentConfig `yaml:"agent"`
+	System *SystemConfig   `yaml:"system"`
+	GPU    *GPUConfig      `yaml:"gpu"`
+	Update *UpdateConfig   `yaml:"update"`
+}
+
+type fileAgentConfig struct {
+	UUID           string   `yaml:"uuid"`
+	RobotCode      string   `yaml:"robot_code"`
+	DashboardURL   string   `yaml:"dashboard_url"`
+	Token          string   `yaml:"token"`
+	ReportInterval Duration `yaml:"report_interval"`
+	HTTPTimeout    Duration `yaml:"http_timeout"`
 }
 
 func Default() Config {
@@ -159,7 +160,7 @@ func Default() Config {
 		},
 		BMS: BMSConfig{
 			Protocol:       "sensor_msgs_battery_state",
-			ROSTopic:       "/bms_can/battery_data",
+			ROSTopic:       "/batcan/data",
 			ROSMessageType: "sensor_msgs/msg/BatteryState",
 			ROSSetup:       []string{"/opt/ros/humble/setup.bash"},
 			ReadTimeout:    Duration(3 * time.Second),
@@ -203,7 +204,11 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse agent config: %w", err)
 	}
 	cfg := Default()
-	cfg.Agent = file.Agent
+	cfg.Agent = AgentConfig{
+		UUID: file.Agent.UUID, RobotCode: file.Agent.RobotCode, RobotModel: file.Model,
+		DashboardURL: file.Agent.DashboardURL, Token: file.Agent.Token,
+		ReportInterval: file.Agent.ReportInterval, HTTPTimeout: file.Agent.HTTPTimeout,
+	}
 	if file.System != nil {
 		cfg.System = *file.System
 	}

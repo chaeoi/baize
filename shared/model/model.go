@@ -69,44 +69,18 @@ type GPUMetrics struct {
 }
 
 type BMSMetrics struct {
-	Enabled              bool                 `json:"enabled"`
-	Online               bool                 `json:"online"`
-	Protocol             string               `json:"protocol"`
-	Interface            string               `json:"interface"`
-	Voltage              float64              `json:"voltage"`
-	Current              float64              `json:"current"`
-	Temperature          float64              `json:"temperature"`
-	SOCPercent           float64              `json:"soc_percent"`
-	PowerSupplyStatus    string               `json:"power_supply_status"`
-	Faults               []string             `json:"faults,omitempty"`
-	LastFrameAt          time.Time            `json:"last_frame_at,omitempty"`
-	PublishedToROS2      bool                 `json:"published_to_ros2"`
-	PowerWatts           float64              `json:"power_watts,omitempty"`
-	TotalEnergyWh        float64              `json:"total_energy_wh,omitempty"`
-	MOSCelsius           float64              `json:"mos_celsius,omitempty"`
-	BoardCelsius         float64              `json:"board_celsius,omitempty"`
-	HeaterCelsius        float64              `json:"heater_celsius,omitempty"`
-	CellCount            int                  `json:"cell_count,omitempty"`
-	TemperatureCount     int                  `json:"temperature_count,omitempty"`
-	RemainingCapacityAh  float64              `json:"remaining_capacity_ah,omitempty"`
-	CycleCount           int                  `json:"cycle_count,omitempty"`
-	SOHPercent           float64              `json:"soh_percent,omitempty"`
-	MaxCellVoltage       float64              `json:"max_cell_voltage,omitempty"`
-	MinCellVoltage       float64              `json:"min_cell_voltage,omitempty"`
-	CellVoltageDelta     float64              `json:"cell_voltage_delta,omitempty"`
-	MaxCellTemperature   float64              `json:"max_cell_temperature,omitempty"`
-	MinCellTemperature   float64              `json:"min_cell_temperature,omitempty"`
-	CellTemperatureDelta float64              `json:"cell_temperature_delta,omitempty"`
-	Specification        BatterySpecification `json:"specification"`
-}
-
-type BatterySpecification struct {
-	Vendor         string  `json:"vendor,omitempty"`
-	PackModel      string  `json:"pack_model,omitempty"`
-	Chemistry      string  `json:"chemistry,omitempty"`
-	NominalVoltage float64 `json:"nominal_voltage,omitempty"`
-	CapacityAh     float64 `json:"capacity_ah,omitempty"`
-	SeriesCells    int     `json:"series_cells,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	Online            bool      `json:"online"`
+	Present           bool      `json:"present"`
+	Protocol          string    `json:"protocol"`
+	Interface         string    `json:"interface"`
+	Voltage           float64   `json:"voltage"`
+	Current           float64   `json:"current"`
+	Temperature       float64   `json:"temperature"`
+	SOCPercent        float64   `json:"soc_percent"`
+	PowerSupplyStatus string    `json:"power_supply_status"`
+	LastFrameAt       time.Time `json:"last_frame_at,omitempty"`
+	PowerWatts        float64   `json:"power_watts,omitempty"`
 }
 
 type MotorSnapshot struct {

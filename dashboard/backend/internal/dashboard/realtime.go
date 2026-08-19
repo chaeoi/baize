@@ -84,12 +84,12 @@ type PublicGPU struct {
 
 type PublicBattery struct {
 	Online            bool    `json:"online"`
+	Present           bool    `json:"present"`
 	SOCPercent        float64 `json:"soc_percent"`
 	Voltage           float64 `json:"voltage"`
 	Current           float64 `json:"current"`
 	Temperature       float64 `json:"temperature"`
 	PowerWatts        float64 `json:"power_watts"`
-	FaultCount        int     `json:"fault_count"`
 	PowerSupplyStatus string  `json:"power_supply_status,omitempty"`
 }
 
@@ -197,9 +197,9 @@ func (s *Server) publicRobotWithSamples(record RobotRecord, includeSamples bool)
 	if telemetry.BMS != nil {
 		bms := telemetry.BMS
 		summary.Battery = &PublicBattery{
-			Online: bms.Online, SOCPercent: bms.SOCPercent, Voltage: bms.Voltage,
+			Online: bms.Online, Present: bms.Present, SOCPercent: bms.SOCPercent, Voltage: bms.Voltage,
 			Current: bms.Current, Temperature: bms.Temperature, PowerWatts: bms.PowerWatts,
-			FaultCount: len(bms.Faults), PowerSupplyStatus: bms.PowerSupplyStatus,
+			PowerSupplyStatus: bms.PowerSupplyStatus,
 		}
 	}
 	if telemetry.Motors != nil {

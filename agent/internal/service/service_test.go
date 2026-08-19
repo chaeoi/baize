@@ -140,7 +140,7 @@ func TestValidConfigRejectsSymbolicLink(t *testing.T) {
 func TestDefaultConfigIsGeneratedButIntentionallyInvalid(t *testing.T) {
 	uuid := "7fd34256-bf3a-4cf6-8da0-fbce40f34d11"
 	content := defaultConfig(uuid)
-	if !strings.Contains(content, "uuid: \""+uuid+"\"") || !strings.Contains(content, "robot_model: \"\"") || !strings.Contains(content, "#   2m_v0.1.2") {
+	if !strings.Contains(content, "uuid: \""+uuid+"\"") || !strings.Contains(content, "model: \"\"") || !strings.Contains(content, "#   2m_v0.1.2") {
 		t.Fatalf("default config is missing editable identity or supported model: %s", content)
 	}
 	path := filepath.Join(t.TempDir(), "config.yml")
