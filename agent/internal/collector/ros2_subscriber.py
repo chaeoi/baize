@@ -8,7 +8,6 @@ Agent consumes and keeps one rclpy process alive for the lifetime of a stream.
 
 import argparse
 import json
-import math
 import struct
 import sys
 import time
@@ -19,11 +18,6 @@ from rclpy.qos import QoSProfile, qos_profile_sensor_data
 from rclpy.executors import ExternalShutdownException
 
 
-def finite(value):
-    value = float(value)
-    return value if math.isfinite(value) else 0.0
-
-
 def emit(payload):
     output = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
     sys.stdout.buffer.write(output.encode("utf-8"))
@@ -32,7 +26,12 @@ def emit(payload):
 
 
 def emit_motor(message):
-    names = [str(value) for value in message.name]
+    raw_names = message.name
+    if raw_names == emit_motor.last_raw_names:
+        names = emit_motor.last_names
+    else:
+        names = [str(value) for value in raw_names]
+        emit_motor.last_raw_names = list(raw_names)
     count = len(names)
     if count > 1024:
         return
@@ -54,12 +53,13 @@ def emit_motor(message):
     for values in (message.position, message.velocity, message.effort):
         if len(values) != count:
             return
-        chunks.append(struct.pack("<" + "d" * count, *(finite(value) for value in values)))
+        chunks.append(struct.pack("<" + "d" * count, *values))
     sys.stdout.buffer.write(b"".join(chunks))
     sys.stdout.buffer.flush()
 
 
 emit_motor.last_names = None
+emit_motor.last_raw_names = None
 
 
 class Subscriber(Node):
