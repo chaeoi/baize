@@ -100,11 +100,11 @@ sudo /opt/baize/agent/baize-agent service uninstall
 
 支持的模型、ROS2 topic、关节标签与电机元数据均编入 Agent；不支持的型号会在
 安装校验阶段失败。Agent 使用内置的轻量 ROS2 订阅器长期监听 topic，只输出所需
-字段，避免高频电机数据经过 `ros2 topic echo` 的 YAML 格式化；旧 ROS 环境不可用
-时才回退到 CLI 读取：
+字段，避免高频电机数据经过 `ros2 topic echo` 的 YAML 格式化；电机订阅器在优化
+路径启动失败时才回退到 CLI 读取：
 
 - 电机：`/motor/q2w_upper_motor_joint_state`，`sensor_msgs/msg/JointState`
-- 电池：`/batcan/data`，`sensor_msgs/msg/BatteryState`
+- 电池：`/batcan/data`，`diagnostic_msgs/msg/DiagnosticArray`
 
 电池 topic 由独立 BMS 服务发布：
 
