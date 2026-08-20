@@ -28,14 +28,16 @@ type jointStateMessage struct {
 }
 
 type MotorCollector struct {
-	config     config.MotorConfig
-	streamOnce sync.Once
-	readyOnce  sync.Once
-	ready      chan struct{}
-	mu         sync.Mutex
-	latest     model.MotorSnapshot
-	pending    []model.MotorSample
-	streamErr  error
+	config       config.MotorConfig
+	streamOnce   sync.Once
+	readyOnce    sync.Once
+	ready        chan struct{}
+	mu           sync.Mutex
+	latest       model.MotorSnapshot
+	pending      []model.MotorSample
+	pendingHead  int
+	pendingCount int
+	streamErr    error
 }
 
 var rosEnvironmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
@@ -116,9 +118,8 @@ func (c *MotorCollector) collectStream(ctx context.Context) (model.MotorSnapshot
 
 	c.mu.Lock()
 	snapshot := cloneMotorSnapshot(c.latest)
-	snapshot.Samples = append([]model.MotorSample(nil), c.pending...)
+	snapshot.Samples = c.takePendingSamplesLocked()
 	snapshot.SampleRateHz = c.config.FastSampleRateHz
-	c.pending = c.pending[:0]
 	c.mu.Unlock()
 	return snapshot, nil
 }
@@ -235,18 +236,46 @@ func (c *MotorCollector) consumeMotorStates(motors []model.MotorState, sampledAt
 		now = time.Now().UTC()
 	}
 	c.mu.Lock()
-	c.latest = model.MotorSnapshot{Enabled: true, Source: "ros2_joint_state", Topic: c.config.Topic, TopicOnline: true, SampledAt: now, Motors: cloneMotorStates(motors), SampleRateHz: c.config.FastSampleRateHz}
-	c.pending = append(c.pending, model.MotorSample{At: now, Motors: compactMotorStates(motors)})
+	c.latest = model.MotorSnapshot{Enabled: true, Source: "ros2_joint_state", Topic: c.config.Topic, TopicOnline: true, SampledAt: now, Motors: motors, SampleRateHz: c.config.FastSampleRateHz}
+	c.appendPendingLocked(model.MotorSample{At: now, Motors: compactMotorStates(motors)})
+	c.streamErr = nil
+	c.mu.Unlock()
+	c.readyOnce.Do(func() { close(c.ready) })
+}
+
+func (c *MotorCollector) appendPendingLocked(sample model.MotorSample) {
 	maxPending := int(c.config.FastSampleRateHz * float64(c.config.FastBufferSeconds))
 	if maxPending < 1 {
 		maxPending = 1
 	}
-	if len(c.pending) > maxPending {
-		c.pending = append([]model.MotorSample(nil), c.pending[len(c.pending)-maxPending:]...)
+	if cap(c.pending) != maxPending {
+		c.pending = make([]model.MotorSample, maxPending)
+		c.pendingHead = 0
+		c.pendingCount = 0
 	}
-	c.streamErr = nil
-	c.mu.Unlock()
-	c.readyOnce.Do(func() { close(c.ready) })
+	index := (c.pendingHead + c.pendingCount) % maxPending
+	if c.pendingCount == maxPending {
+		index = c.pendingHead
+		c.pendingHead = (c.pendingHead + 1) % maxPending
+	} else {
+		c.pendingCount++
+	}
+	c.pending[index] = sample
+}
+
+func (c *MotorCollector) takePendingSamplesLocked() []model.MotorSample {
+	if c.pendingCount == 0 {
+		return nil
+	}
+	result := make([]model.MotorSample, c.pendingCount)
+	for index := range result {
+		source := (c.pendingHead + index) % len(c.pending)
+		result[index] = c.pending[source]
+		c.pending[source] = model.MotorSample{}
+	}
+	c.pendingHead = 0
+	c.pendingCount = 0
+	return result
 }
 
 func cloneMotorSnapshot(snapshot model.MotorSnapshot) model.MotorSnapshot {

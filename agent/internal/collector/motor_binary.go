@@ -39,8 +39,10 @@ func (c *MotorCollector) readBinaryProcess(ctx context.Context, command string) 
 	}
 	reader := bufio.NewReaderSize(stdout, 256*1024)
 	names := []string(nil)
+	header := make([]byte, motorBinaryHeaderSize)
+	values := make([]float64, 0, 3*32)
+	rawValues := make([]byte, 0, 32*8)
 	for {
-		header := make([]byte, motorBinaryHeaderSize)
 		if _, err := io.ReadFull(reader, header); err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
@@ -77,14 +79,22 @@ func (c *MotorCollector) readBinaryProcess(ctx context.Context, command string) 
 		if len(names) != count {
 			return stop(fmt.Errorf("optimized motor frame omitted initial names"))
 		}
-		values := make([]float64, count*3)
-		bytes := make([]byte, count*8)
+		if cap(values) < count*3 {
+			values = make([]float64, count*3)
+		} else {
+			values = values[:count*3]
+		}
+		if cap(rawValues) < count*8 {
+			rawValues = make([]byte, count*8)
+		} else {
+			rawValues = rawValues[:count*8]
+		}
 		for group := 0; group < 3; group++ {
-			if _, err := io.ReadFull(reader, bytes); err != nil {
+			if _, err := io.ReadFull(reader, rawValues); err != nil {
 				return stop(err)
 			}
 			for index := 0; index < count; index++ {
-				values[group*count+index] = math.Float64frombits(binary.LittleEndian.Uint64(bytes[index*8:]))
+				values[group*count+index] = math.Float64frombits(binary.LittleEndian.Uint64(rawValues[index*8:]))
 			}
 		}
 		motors, err := motorStates(names, values[:count], values[count:2*count], values[2*count:], c.config.JointLabels, c.config.Definitions)

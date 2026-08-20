@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"baize/agent/internal/config"
+	"baize/shared/model"
 )
 
 func TestParseJointState(t *testing.T) {
@@ -105,6 +106,19 @@ func TestMotorCollectorStreamsFastSamples(t *testing.T) {
 	second, err := collector.Collect(ctx)
 	if err != nil || len(second.Samples) == 0 || second.Samples[0].Motors[0].TorqueNm != 3.6 {
 		t.Fatalf("unexpected fast samples: %+v err=%v", second.Samples, err)
+	}
+}
+
+func TestMotorCollectorPendingRingBuffer(t *testing.T) {
+	collector := NewMotorCollector(config.MotorConfig{FastSampleRateHz: 2, FastBufferSeconds: 2})
+	collector.mu.Lock()
+	for index := 0; index < 5; index++ {
+		collector.appendPendingLocked(model.MotorSample{At: time.Unix(int64(index), 0)})
+	}
+	samples := collector.takePendingSamplesLocked()
+	collector.mu.Unlock()
+	if len(samples) != 4 || samples[0].At.Unix() != 1 || samples[3].At.Unix() != 4 {
+		t.Fatalf("ring buffer did not retain newest samples: %+v", samples)
 	}
 }
 
