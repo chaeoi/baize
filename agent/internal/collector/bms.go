@@ -79,7 +79,6 @@ func decodeDiagnosticArray(output []byte, metrics model.BMSMetrics) (model.BMSMe
 	}
 
 	metrics.Online = true
-	metrics.Present = true
 	metrics.LastFrameAt = time.Now().UTC()
 	metrics.Metrics = make(map[string]float64)
 	var temperatures []float64
@@ -89,6 +88,7 @@ func decodeDiagnosticArray(output []byte, metrics model.BMSMetrics) (model.BMSMe
 			values[item.Key] = strings.TrimSpace(item.Value)
 		}
 		if strings.HasSuffix(status.Name, "/summary") {
+			metrics.Present = status.Message == "BMS data received"
 			if profile := values["profile"]; profile != "" {
 				metrics.Profile = profile
 			}
@@ -101,6 +101,9 @@ func decodeDiagnosticArray(output []byte, metrics model.BMSMetrics) (model.BMSMe
 			if value, ok := numericValue(values["power_supply_status"]); ok {
 				metrics.PowerSupplyStatus = powerStatus(uint8(value))
 			}
+		}
+		if !strings.HasSuffix(status.Name, "/summary") && len(values) > 0 {
+			metrics.Present = true
 		}
 		for key, raw := range values {
 			value, ok := numericValue(raw)

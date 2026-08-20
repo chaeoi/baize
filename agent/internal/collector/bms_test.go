@@ -51,3 +51,21 @@ func TestPowerStatus(t *testing.T) {
 		t.Fatal("unexpected power status mapping")
 	}
 }
+
+func TestDecodeDiagnosticArrayWithoutBatteryFrame(t *testing.T) {
+	metrics, err := decodeDiagnosticArray([]byte(`
+status:
+- name: batcan/auto/summary
+  message: No BMS data received
+  hardware_id: BMS auto-detection
+  values:
+  - key: profile
+    value: auto
+`), model.BMSMetrics{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metrics.Online || metrics.Present {
+		t.Fatalf("topic must be online while the battery is absent: %+v", metrics)
+	}
+}
