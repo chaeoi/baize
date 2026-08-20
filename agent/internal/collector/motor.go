@@ -34,9 +34,11 @@ type MotorCollector struct {
 	ready        chan struct{}
 	mu           sync.Mutex
 	latest       model.MotorSnapshot
+	scratch      []model.MotorState
 	pending      []model.MotorSample
 	pendingHead  int
 	pendingCount int
+	recycled     []model.MotorSample
 	streamErr    error
 }
 
@@ -237,13 +239,28 @@ func (c *MotorCollector) consumeMotorStates(motors []model.MotorState, sampledAt
 	}
 	c.mu.Lock()
 	c.latest = model.MotorSnapshot{Enabled: true, Source: "ros2_joint_state", Topic: c.config.Topic, TopicOnline: true, SampledAt: now, Motors: motors, SampleRateHz: c.config.FastSampleRateHz}
-	c.appendPendingLocked(model.MotorSample{At: now, Motors: compactMotorStates(motors)})
+	index := c.appendPendingLocked(model.MotorSample{At: now})
+	c.pending[index].Motors = compactMotorStatesInto(c.pending[index].Motors, motors)
 	c.streamErr = nil
 	c.mu.Unlock()
 	c.readyOnce.Do(func() { close(c.ready) })
 }
 
-func (c *MotorCollector) appendPendingLocked(sample model.MotorSample) {
+func (c *MotorCollector) consumeMotorValues(names []string, positions, velocities, efforts []float64, sampledAt time.Time) error {
+	c.mu.Lock()
+	motors, err := motorStatesInto(c.scratch, names, positions, velocities, efforts, c.config.JointLabels, c.config.Definitions)
+	if err == nil {
+		c.scratch = motors
+	}
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	c.consumeMotorStates(motors, sampledAt)
+	return nil
+}
+
+func (c *MotorCollector) appendPendingLocked(sample model.MotorSample) int {
 	maxPending := int(c.config.FastSampleRateHz * float64(c.config.FastBufferSeconds))
 	if maxPending < 1 {
 		maxPending = 1
@@ -261,17 +278,22 @@ func (c *MotorCollector) appendPendingLocked(sample model.MotorSample) {
 		c.pendingCount++
 	}
 	c.pending[index] = sample
+	return index
 }
 
 func (c *MotorCollector) takePendingSamplesLocked() []model.MotorSample {
 	if c.pendingCount == 0 {
 		return nil
 	}
-	result := make([]model.MotorSample, c.pendingCount)
+	if cap(c.recycled) < c.pendingCount {
+		c.recycled = make([]model.MotorSample, c.pendingCount)
+	} else {
+		c.recycled = c.recycled[:c.pendingCount]
+	}
+	result := c.recycled
 	for index := range result {
 		source := (c.pendingHead + index) % len(c.pending)
-		result[index] = c.pending[source]
-		c.pending[source] = model.MotorSample{}
+		result[index], c.pending[source] = c.pending[source], result[index]
 	}
 	c.pendingHead = 0
 	c.pendingCount = 0
@@ -292,7 +314,15 @@ func cloneMotorStates(motors []model.MotorState) []model.MotorState {
 }
 
 func compactMotorStates(motors []model.MotorState) []model.MotorSampleState {
-	result := make([]model.MotorSampleState, len(motors))
+	return compactMotorStatesInto(nil, motors)
+}
+
+func compactMotorStatesInto(result []model.MotorSampleState, motors []model.MotorState) []model.MotorSampleState {
+	if cap(result) < len(motors) {
+		result = make([]model.MotorSampleState, len(motors))
+	} else {
+		result = result[:len(motors)]
+	}
 	for index, motor := range motors {
 		velocity := motor.VelocityRadPerSec
 		if velocity == 0 && motor.VelocityRPS != 0 {
@@ -322,6 +352,10 @@ func parseMotorMessage(data []byte, labels map[string]string, definitions map[st
 }
 
 func motorStates(names []string, positions, velocities, efforts []float64, labels map[string]string, definitions map[string]config.MotorDefinition) ([]model.MotorState, error) {
+	return motorStatesInto(nil, names, positions, velocities, efforts, labels, definitions)
+}
+
+func motorStatesInto(result []model.MotorState, names []string, positions, velocities, efforts []float64, labels map[string]string, definitions map[string]config.MotorDefinition) ([]model.MotorState, error) {
 	count := len(names)
 	if count == 0 {
 		count = max(len(positions), len(velocities), len(efforts))
@@ -334,7 +368,11 @@ func motorStates(names []string, positions, velocities, efforts []float64, label
 		return nil, fmt.Errorf("JointState array size mismatch: name=%d position=%d velocity=%d effort=%d",
 			count, len(positions), len(velocities), len(efforts))
 	}
-	result := make([]model.MotorState, count)
+	if cap(result) < count {
+		result = make([]model.MotorState, count)
+	} else {
+		result = result[:count]
+	}
 	for i := 0; i < count; i++ {
 		definition := definitions[names[i]]
 		result[i] = model.MotorState{

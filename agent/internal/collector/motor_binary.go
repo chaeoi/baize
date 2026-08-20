@@ -97,15 +97,13 @@ func (c *MotorCollector) readBinaryProcess(ctx context.Context, command string) 
 				values[group*count+index] = math.Float64frombits(binary.LittleEndian.Uint64(rawValues[index*8:]))
 			}
 		}
-		motors, err := motorStates(names, values[:count], values[count:2*count], values[2*count:], c.config.JointLabels, c.config.Definitions)
-		if err != nil {
-			return stop(err)
-		}
 		sampledAt := time.Time{}
 		if stampNS > 0 {
 			sampledAt = time.Unix(0, stampNS).UTC()
 		}
-		c.consumeMotorStates(motors, sampledAt)
+		if err := c.consumeMotorValues(names, values[:count], values[count:2*count], values[2*count:], sampledAt); err != nil {
+			return stop(err)
+		}
 	}
 	<-stderrDone
 	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
