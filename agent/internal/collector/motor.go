@@ -147,7 +147,7 @@ func (c *MotorCollector) readStreamProcess(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := c.readProcess(ctx, command); err == nil || ctx.Err() != nil {
+	if err := c.readBinaryProcess(ctx, command); err == nil || ctx.Err() != nil {
 		return err
 	}
 	// Keep compatibility with older ROS installations and the test shim. The
@@ -226,6 +226,10 @@ func (c *MotorCollector) consumeStreamMessage(data []byte) {
 		c.mu.Unlock()
 		return
 	}
+	c.consumeMotorStates(motors, sampledAt)
+}
+
+func (c *MotorCollector) consumeMotorStates(motors []model.MotorState, sampledAt time.Time) {
 	now := sampledAt
 	if now.IsZero() {
 		now = time.Now().UTC()
