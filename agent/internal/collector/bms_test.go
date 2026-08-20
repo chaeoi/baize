@@ -52,6 +52,16 @@ func TestPowerStatus(t *testing.T) {
 	}
 }
 
+func TestDecodeBMSMessage(t *testing.T) {
+	metrics, err := decodeBMSMessage([]byte(`{"type":"bms","stamp_ns":1700000000000000000,"status":[{"name":"batcan/jbd/summary","message":"BMS data received","values":[{"key":"voltage","value":"38.2"},{"key":"percentage","value":"0.5"}]}]}`), model.BMSMetrics{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metrics.Online || !metrics.Present || metrics.Voltage != 38.2 || metrics.SOCPercent != 50 || metrics.LastFrameAt.IsZero() {
+		t.Fatalf("unexpected JSON BMS: %+v", metrics)
+	}
+}
+
 func TestDecodeDiagnosticArrayWithoutBatteryFrame(t *testing.T) {
 	metrics, err := decodeDiagnosticArray([]byte(`
 status:

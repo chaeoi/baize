@@ -46,6 +46,16 @@ func TestParseJointStateRejectsMismatchedArrays(t *testing.T) {
 	}
 }
 
+func TestParseJointStateJSON(t *testing.T) {
+	motors, sampledAt, err := parseJointStateJSON([]byte(`{"type":"motor","stamp_ns":1700000000000000000,"name":["hip"],"position":[1.5],"velocity":[2.5],"effort":[3.5]}`), map[string]string{"hip": "left_hip"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(motors) != 1 || motors[0].Label != "left_hip" || motors[0].TorqueNm != 3.5 || sampledAt.IsZero() {
+		t.Fatalf("unexpected JSON JointState: motors=%+v sampled_at=%v", motors, sampledAt)
+	}
+}
+
 func TestMotorCollectorReadsSimulatedROS2Topic(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")

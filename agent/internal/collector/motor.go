@@ -143,11 +143,24 @@ func (c *MotorCollector) streamLoop(ctx context.Context) {
 }
 
 func (c *MotorCollector) readStreamProcess(ctx context.Context) error {
-	command, err := rosCommand(c.config.ROSSetup, c.config.ROSEnvironment, c.config.ROSUser,
-		"ros2 topic echo --no-daemon "+shellQuote(c.config.Topic)+" "+shellQuote(c.config.MessageType))
+	command, err := rosSubscriberCommand(c.config.ROSSetup, c.config.ROSEnvironment, c.config.ROSUser, c.config.Topic, c.config.MessageType)
 	if err != nil {
 		return err
 	}
+	if err := c.readProcess(ctx, command); err == nil || ctx.Err() != nil {
+		return err
+	}
+	// Keep compatibility with older ROS installations and the test shim. The
+	// optimized subscriber is always selected first on a normal robot.
+	legacy, legacyErr := rosCommand(c.config.ROSSetup, c.config.ROSEnvironment, c.config.ROSUser,
+		"ros2 topic echo --no-daemon "+shellQuote(c.config.Topic)+" "+shellQuote(c.config.MessageType))
+	if legacyErr != nil {
+		return err
+	}
+	return c.readProcess(ctx, legacy)
+}
+
+func (c *MotorCollector) readProcess(ctx context.Context, command string) error {
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-lc", command)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -170,8 +183,15 @@ func (c *MotorCollector) readStreamProcess(ctx context.Context) error {
 	scanner.Buffer(make([]byte, 16*1024), 2*1024*1024)
 	var message strings.Builder
 	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "---" {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "{") {
+			c.consumeStreamMessage([]byte(line))
+			continue
+		}
+		if line == "---" {
 			c.consumeStreamMessage([]byte(message.String()))
 			message.Reset()
 			continue
@@ -199,14 +219,17 @@ func (c *MotorCollector) consumeStreamMessage(data []byte) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return
 	}
-	motors, err := parseJointState(data, c.config.JointLabels, c.config.Definitions)
+	motors, sampledAt, err := parseMotorMessage(data, c.config.JointLabels, c.config.Definitions)
 	if err != nil {
 		c.mu.Lock()
 		c.streamErr = err
 		c.mu.Unlock()
 		return
 	}
-	now := time.Now().UTC()
+	now := sampledAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	c.mu.Lock()
 	c.latest = model.MotorSnapshot{Enabled: true, Source: "ros2_joint_state", Topic: c.config.Topic, TopicOnline: true, SampledAt: now, Motors: cloneMotorStates(motors), SampleRateHz: c.config.FastSampleRateHz}
 	c.pending = append(c.pending, model.MotorSample{At: now, Motors: compactMotorStates(motors)})
@@ -253,27 +276,40 @@ func parseJointState(data []byte, labels map[string]string, definitions map[stri
 	if err := decoder.Decode(&message); err != nil {
 		return nil, fmt.Errorf("decode JointState YAML: %w", err)
 	}
-	count := len(message.Name)
+	return motorStates(message.Name, message.Position, message.Velocity, message.Effort, labels, definitions)
+}
+
+func parseMotorMessage(data []byte, labels map[string]string, definitions map[string]config.MotorDefinition) ([]model.MotorState, time.Time, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		return parseJointStateJSON(trimmed, labels, definitions)
+	}
+	motors, err := parseJointState(trimmed, labels, definitions)
+	return motors, time.Time{}, err
+}
+
+func motorStates(names []string, positions, velocities, efforts []float64, labels map[string]string, definitions map[string]config.MotorDefinition) ([]model.MotorState, error) {
+	count := len(names)
 	if count == 0 {
-		count = max(len(message.Position), len(message.Velocity), len(message.Effort))
-		message.Name = make([]string, count)
-		for i := range message.Name {
-			message.Name[i] = fmt.Sprintf("motor_id_%02d", i+1)
+		count = max(len(positions), len(velocities), len(efforts))
+		names = make([]string, count)
+		for i := range names {
+			names[i] = fmt.Sprintf("motor_id_%02d", i+1)
 		}
 	}
-	if len(message.Position) != count || len(message.Velocity) != count || len(message.Effort) != count {
+	if len(positions) != count || len(velocities) != count || len(efforts) != count {
 		return nil, fmt.Errorf("JointState array size mismatch: name=%d position=%d velocity=%d effort=%d",
-			count, len(message.Position), len(message.Velocity), len(message.Effort))
+			count, len(positions), len(velocities), len(efforts))
 	}
 	result := make([]model.MotorState, count)
 	for i := 0; i < count; i++ {
-		definition := definitions[message.Name[i]]
+		definition := definitions[names[i]]
 		result[i] = model.MotorState{
-			ID:                message.Name[i],
-			Label:             labels[message.Name[i]],
-			PositionRad:       message.Position[i],
-			VelocityRadPerSec: message.Velocity[i],
-			TorqueNm:          message.Effort[i],
+			ID:                names[i],
+			Label:             labels[names[i]],
+			PositionRad:       positions[i],
+			VelocityRadPerSec: velocities[i],
+			TorqueNm:          efforts[i],
 			Brand:             definition.Brand,
 			Model:             definition.Model,
 			CANInterface:      definition.CANInterface,
