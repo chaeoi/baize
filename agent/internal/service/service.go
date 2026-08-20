@@ -119,6 +119,15 @@ func install(options installOptions, executablePath string) error {
 	if err := os.MkdirAll(installDir, 0o750); err != nil {
 		return err
 	}
+	// The service runs as the ubuntu account. Ensure the parent is traversable
+	// on fresh systems where /opt/baize was created by root with mode 0750.
+	parentDir := filepath.Dir(installDir)
+	if err := os.Chown(parentDir, 0, groupID); err != nil {
+		return err
+	}
+	if err := os.Chmod(parentDir, 0o750); err != nil {
+		return err
+	}
 	if err := os.Chown(installDir, 0, groupID); err != nil {
 		return err
 	}

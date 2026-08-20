@@ -165,10 +165,20 @@ func readKeyValues(path string) (map[string]uint64, error) {
 }
 
 func readFirstFloat(path string) (float64, error) {
-	data, err := os.ReadFile(path)
+	// Some ARM thermal drivers expose sysfs values whose blocking read can
+	// wait indefinitely when the sensor is unavailable. All callers are on
+	// the metrics collection path, so a stuck sensor must never stall reports.
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return 0, err
 	}
+	defer syscall.Close(fd)
+	data := make([]byte, 128)
+	n, err := syscall.Read(fd, data)
+	if err != nil {
+		return 0, err
+	}
+	data = data[:n]
 	fields := strings.Fields(string(data))
 	if len(fields) == 0 {
 		return 0, errors.New("empty numeric file")
