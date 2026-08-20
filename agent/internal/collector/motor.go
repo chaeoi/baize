@@ -277,7 +277,13 @@ func (c *MotorCollector) appendPendingLocked(sample model.MotorSample) int {
 	} else {
 		c.pendingCount++
 	}
+	// Preserve the slot's reusable motor slice when the new sample only
+	// replaces its timestamp. This keeps allocations bounded after warm-up.
+	motors := c.pending[index].Motors
 	c.pending[index] = sample
+	if c.pending[index].Motors == nil {
+		c.pending[index].Motors = motors
+	}
 	return index
 }
 

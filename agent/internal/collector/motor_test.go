@@ -112,6 +112,7 @@ func TestMotorCollectorStreamsFastSamples(t *testing.T) {
 func TestMotorCollectorPendingRingBuffer(t *testing.T) {
 	collector := NewMotorCollector(config.MotorConfig{FastSampleRateHz: 2, FastBufferSeconds: 2})
 	collector.mu.Lock()
+	collector.appendPendingLocked(model.MotorSample{Motors: make([]model.MotorSampleState, 1)})
 	for index := 0; index < 5; index++ {
 		collector.appendPendingLocked(model.MotorSample{At: time.Unix(int64(index), 0)})
 	}
