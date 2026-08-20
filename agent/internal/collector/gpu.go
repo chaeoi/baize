@@ -95,23 +95,15 @@ func parseNVIDIAOutput(output []byte) ([]model.GPUMetrics, bool, error) {
 
 func collectJetsonGPU(name string) (model.GPUMetrics, error) {
 	metrics := model.GPUMetrics{Name: name}
-	loadData, loadErr := os.ReadFile("/sys/devices/platform/bus@0/17000000.gpu/load")
-	temperatureData, temperatureErr := readJetsonGPUTemperature()
+	load, loadErr := readFirstFloat("/sys/devices/platform/bus@0/17000000.gpu/load")
+	temperature, temperatureErr := readJetsonGPUTemperature()
 	if loadErr != nil && temperatureErr != nil {
 		return metrics, ErrNoGPU
 	}
 	if loadErr == nil {
-		load, err := strconv.ParseFloat(strings.TrimSpace(string(loadData)), 64)
-		if err != nil {
-			return metrics, fmt.Errorf("parse Jetson GPU load: %w", err)
-		}
 		metrics.UtilizationPercent = clampPercent(load / 10)
 	}
 	if temperatureErr == nil {
-		temperature, err := strconv.ParseFloat(strings.TrimSpace(string(temperatureData)), 64)
-		if err != nil {
-			return metrics, fmt.Errorf("parse Jetson GPU temperature: %w", err)
-		}
 		metrics.TemperatureCelsius = temperature / 1000
 	}
 	if memory, err := readKeyValues("/proc/meminfo"); err == nil {
@@ -124,16 +116,16 @@ func collectJetsonGPU(name string) (model.GPUMetrics, error) {
 	return metrics, nil
 }
 
-func readJetsonGPUTemperature() ([]byte, error) {
+func readJetsonGPUTemperature() (float64, error) {
 	typePaths, _ := filepath.Glob("/sys/class/thermal/thermal_zone*/type")
 	for _, typePath := range typePaths {
 		value, err := os.ReadFile(typePath)
 		if err != nil || strings.TrimSpace(string(value)) != "gpu-thermal" {
 			continue
 		}
-		return os.ReadFile(filepath.Join(filepath.Dir(typePath), "temp"))
+		return readFirstFloat(filepath.Join(filepath.Dir(typePath), "temp"))
 	}
-	return nil, ErrNoGPU
+	return 0, ErrNoGPU
 }
 
 func nvidiaValueAvailable(value string) bool {
