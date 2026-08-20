@@ -54,9 +54,9 @@ motor:
 
 bms:
   enabled: true
-  protocol: sensor_msgs_battery_state
+  protocol: batcan_diagnostic_array
   topic: /batcan/data
-  message_type: sensor_msgs/msg/BatteryState
+  message_type: diagnostic_msgs/msg/DiagnosticArray
   ros_setup:
     - /opt/ros/humble/setup.bash
   ros_environment:

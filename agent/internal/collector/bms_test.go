@@ -7,20 +7,42 @@ import (
 	"baize/shared/model"
 )
 
-func TestDecodeBatteryState(t *testing.T) {
-	metrics, err := decodeBatteryState([]byte(`
-voltage: 52.4
-current: -10.5
-temperature: 31.0
-percentage: 0.9
-power_supply_status: 2
-present: true
+func TestDecodeDiagnosticArray(t *testing.T) {
+	metrics, err := decodeDiagnosticArray([]byte(`
+status:
+- name: batcan/jbd/summary
+  message: BMS data received
+  hardware_id: JBD-CANBUS
+  values:
+  - key: profile
+    value: jbd
+  - key: voltage
+    value: '38.22'
+  - key: current
+    value: '-2.88'
+  - key: percentage
+    value: '0.01'
+  - key: power_supply_status
+    value: '2'
+- name: batcan/jbd/cell_voltage_1_3
+  values:
+  - key: cell_voltage.1
+    value: '3.801'
+  - key: cell_voltage.2
+    value: '3.802'
+- name: batcan/jbd/temperatures_1_3
+  values:
+  - key: cell_temperature.1
+    value: '31.5'
 `), model.BMSMetrics{Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !metrics.Online || metrics.Voltage != 52.4 || metrics.Current != -10.5 || metrics.SOCPercent != 90 || metrics.PowerSupplyStatus != "discharging" || math.Abs(metrics.PowerWatts+550.2) > 1e-9 {
+	if !metrics.Online || metrics.Profile != "jbd" || metrics.Voltage != 38.22 || metrics.Current != -2.88 || metrics.SOCPercent != 1 || metrics.PowerSupplyStatus != "discharging" || math.Abs(metrics.PowerWatts+110.0736) > 1e-9 {
 		t.Fatalf("unexpected BMS data: %+v", metrics)
+	}
+	if len(metrics.CellVoltages) != 2 || math.Abs(metrics.CellVoltages[0]-3.801) > 1e-9 || len(metrics.CellTemperatures) != 1 || metrics.Temperature != 31.5 {
+		t.Fatalf("unexpected cell data: %+v", metrics)
 	}
 }
 
