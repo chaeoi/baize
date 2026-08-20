@@ -159,9 +159,9 @@ func Default() Config {
 			Definitions:       make(map[string]MotorDefinition),
 		},
 		BMS: BMSConfig{
-			Protocol:       "sensor_msgs_battery_state",
+			Protocol:       "batcan_diagnostic_array",
 			ROSTopic:       "/batcan/data",
-			ROSMessageType: "sensor_msgs/msg/BatteryState",
+			ROSMessageType: "diagnostic_msgs/msg/DiagnosticArray",
 			ROSSetup:       []string{"/opt/ros/humble/setup.bash"},
 			ReadTimeout:    Duration(3 * time.Second),
 		},

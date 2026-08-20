@@ -69,18 +69,22 @@ type GPUMetrics struct {
 }
 
 type BMSMetrics struct {
-	Enabled           bool      `json:"enabled"`
-	Online            bool      `json:"online"`
-	Present           bool      `json:"present"`
-	Protocol          string    `json:"protocol"`
-	Interface         string    `json:"interface"`
-	Voltage           float64   `json:"voltage"`
-	Current           float64   `json:"current"`
-	Temperature       float64   `json:"temperature"`
-	SOCPercent        float64   `json:"soc_percent"`
-	PowerSupplyStatus string    `json:"power_supply_status"`
-	LastFrameAt       time.Time `json:"last_frame_at,omitempty"`
-	PowerWatts        float64   `json:"power_watts,omitempty"`
+	Enabled           bool               `json:"enabled"`
+	Online            bool               `json:"online"`
+	Present           bool               `json:"present"`
+	Protocol          string             `json:"protocol"`
+	Interface         string             `json:"interface"`
+	Profile           string             `json:"profile,omitempty"`
+	Voltage           float64            `json:"voltage"`
+	Current           float64            `json:"current"`
+	Temperature       float64            `json:"temperature"`
+	SOCPercent        float64            `json:"soc_percent"`
+	PowerSupplyStatus string             `json:"power_supply_status"`
+	LastFrameAt       time.Time          `json:"last_frame_at,omitempty"`
+	PowerWatts        float64            `json:"power_watts,omitempty"`
+	CellVoltages      []float64          `json:"cell_voltages,omitempty"`
+	CellTemperatures  []float64          `json:"cell_temperatures,omitempty"`
+	Metrics           map[string]float64 `json:"metrics,omitempty"`
 }
 
 type MotorSnapshot struct {
