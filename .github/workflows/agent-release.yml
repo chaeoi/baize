@@ -126,7 +126,8 @@ jobs:
             ros-humble-sensor-msgs ros-humble-diagnostic-msgs
       - name: 构建 C++ Subscriber
         run: |
-          set -euo pipefail
+          # Container jobs default to POSIX sh, which has no pipefail option.
+          set -eu
           . /opt/ros/humble/setup.sh
           cmake -S agent/ros2_subscriber -B build/baize-ros2-subscriber -DCMAKE_BUILD_TYPE=Release
           cmake --build build/baize-ros2-subscriber --parallel
