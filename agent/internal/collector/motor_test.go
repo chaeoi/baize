@@ -2,6 +2,9 @@ package collector
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,10 +66,8 @@ func TestMotorCollectorReadsSimulatedROS2Topic(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	ros2 := []byte("#!/bin/sh\nprintf '%s\\n' 'name: [hip]' 'position: [1.5]' 'velocity: [2.5]' 'effort: [3.5]'\n")
-	if err := os.WriteFile(filepath.Join(binDir, "ros2"), ros2, 0o750); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeMotorSubscriber(t, filepath.Join(binDir, "baize-ros2-subscriber"), []motorTestFrame{{position: 1.5, velocity: 2.5, effort: 3.5}})
+	t.Setenv("BAIZE_ROS2_SUBSCRIBER", filepath.Join(binDir, "baize-ros2-subscriber"))
 	setup := filepath.Join(root, "setup.bash")
 	if err := os.WriteFile(setup, []byte("export PATH='"+binDir+"':$PATH\n"), 0o640); err != nil {
 		t.Fatal(err)
@@ -87,10 +88,8 @@ func TestMotorCollectorStreamsFastSamples(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	ros2 := []byte("#!/bin/sh\nprintf '%s\\n' 'name: [hip]' 'position: [1.5]' 'velocity: [2.5]' 'effort: [3.5]' '---'\nsleep 0.001\nprintf '%s\\n' 'name: [hip]' 'position: [1.6]' 'velocity: [2.6]' 'effort: [3.6]' '---'\nsleep 1\n")
-	if err := os.WriteFile(filepath.Join(binDir, "ros2"), ros2, 0o750); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeMotorSubscriber(t, filepath.Join(binDir, "baize-ros2-subscriber"), []motorTestFrame{{position: 1.5, velocity: 2.5, effort: 3.5}, {position: 1.6, velocity: 2.6, effort: 3.6}})
+	t.Setenv("BAIZE_ROS2_SUBSCRIBER", filepath.Join(binDir, "baize-ros2-subscriber"))
 	setup := filepath.Join(root, "setup.bash")
 	if err := os.WriteFile(setup, []byte("export PATH='"+binDir+"':$PATH\n"), 0o640); err != nil {
 		t.Fatal(err)
@@ -102,7 +101,7 @@ func TestMotorCollectorStreamsFastSamples(t *testing.T) {
 	if err != nil || !first.TopicOnline || len(first.Motors) != 1 {
 		t.Fatalf("unexpected first stream snapshot: %+v err=%v", first, err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	second, err := collector.Collect(ctx)
 	if err != nil || len(second.Samples) == 0 || second.Samples[0].Motors[0].TorqueNm != 3.6 {
 		t.Fatalf("unexpected fast samples: %+v err=%v", second.Samples, err)
@@ -124,7 +123,7 @@ func TestMotorCollectorPendingRingBuffer(t *testing.T) {
 }
 
 func TestROSCommandExportsEnvironment(t *testing.T) {
-	command, err := rosCommand(nil, map[string]string{"ROS_LOCALHOST_ONLY": "1"}, "", "ros2 topic echo --once '/motor/state'")
+	command, err := rosCommand(nil, map[string]string{"ROS_LOCALHOST_ONLY": "1"}, "", "baize-ros2-subscriber --topic '/motor/state'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,11 +133,59 @@ func TestROSCommandExportsEnvironment(t *testing.T) {
 }
 
 func TestROSCommandDropsRootToProfileUser(t *testing.T) {
-	command, err := wrapROSCommand("exec ros2 topic echo --once '/motor/state'", "ubuntu", 0)
+	command, err := wrapROSCommand("exec baize-ros2-subscriber --topic '/motor/state'", "ubuntu", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(command, "/usr/bin/setpriv --reset-env") || !strings.Contains(command, "--reuid='ubuntu'") {
 		t.Fatalf("ROS user transition was not configured: %s", command)
 	}
+}
+
+type motorTestFrame struct {
+	position float64
+	velocity float64
+	effort   float64
+}
+
+func writeFakeMotorSubscriber(t *testing.T, path string, frames []motorTestFrame) {
+	t.Helper()
+	var script strings.Builder
+	script.WriteString("#!/bin/sh\n")
+	for index, frame := range frames {
+		if index > 0 {
+			script.WriteString("sleep 0.2\n")
+		}
+		payload := motorTestPayload(frame, index == 0)
+		script.WriteString("printf '")
+		for _, value := range payload {
+			script.WriteString(fmt.Sprintf("\\%03o", value))
+		}
+		script.WriteString("'\n")
+	}
+	script.WriteString("sleep 1\n")
+	if err := os.WriteFile(path, []byte(script.String()), 0o750); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func motorTestPayload(frame motorTestFrame, includeNames bool) []byte {
+	payload := []byte{'B', 'Z', 'M', '1', 1, 0}
+	if includeNames {
+		payload[5] = 1
+	}
+	stamp := uint64(time.Now().UnixNano())
+	var stampBytes [8]byte
+	binary.LittleEndian.PutUint64(stampBytes[:], stamp)
+	payload = append(payload, stampBytes[:]...)
+	payload = append(payload, 1, 0)
+	if includeNames {
+		payload = append(payload, 3, 0, 'h', 'i', 'p')
+	}
+	for _, value := range []float64{frame.position, frame.velocity, frame.effort} {
+		var raw [8]byte
+		binary.LittleEndian.PutUint64(raw[:], math.Float64bits(value))
+		payload = append(payload, raw[:]...)
+	}
+	return payload
 }

@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"crypto/rand"
+	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,11 +28,18 @@ const (
 	privateLogDir = "/var/log/private/baize-agent"
 )
 
+// The release workflow replaces this development stub with the C++ binary for
+// the target architecture before compiling the static Go Agent.
+//
+//go:embed baize-ros2-subscriber
+var embeddedROS2Subscriber []byte
+
 var (
-	installDir      = "/opt/baize/agent"
-	installedBinary = filepath.Join(installDir, "baize-agent")
-	installedConfig = filepath.Join(installDir, "config.yml")
-	unitPath        = "/etc/systemd/system/baize-agent.service"
+	installDir              = "/opt/baize/agent"
+	installedBinary         = filepath.Join(installDir, "baize-agent")
+	installedROS2Subscriber = filepath.Join(installDir, "baize-ros2-subscriber")
+	installedConfig         = filepath.Join(installDir, "config.yml")
+	unitPath                = "/etc/systemd/system/baize-agent.service"
 )
 
 var (
@@ -79,6 +88,62 @@ func Execute(arguments []string, executablePath string) error {
 	default:
 		return fmt.Errorf("unknown service command: %s", arguments[0])
 	}
+}
+
+// PrepareROS2Subscriber materializes the embedded architecture-matched helper
+// in systemd's writable StateDirectory. This also updates the helper whenever
+// the Agent replaces itself through the dashboard updater.
+func PrepareROS2Subscriber() (string, error) {
+	if override := os.Getenv("BAIZE_ROS2_SUBSCRIBER"); override != "" {
+		return override, nil
+	}
+	directory := os.Getenv("STATE_DIRECTORY")
+	if directory == "" {
+		executable, err := os.Executable()
+		if err != nil {
+			return "", err
+		}
+		candidate := filepath.Join(filepath.Dir(executable), "baize-ros2-subscriber")
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate, nil
+		}
+		return "", fmt.Errorf("ROS2 subscriber is not installed beside %s", executable)
+	}
+	if !filepath.IsAbs(directory) || strings.ContainsAny(directory, "\x00\n\r") {
+		return "", errors.New("systemd STATE_DIRECTORY is invalid")
+	}
+	if err := os.MkdirAll(directory, 0o750); err != nil {
+		return "", err
+	}
+	destination := filepath.Join(directory, "baize-ros2-subscriber")
+	if current, err := os.ReadFile(destination); err == nil && bytes.Equal(current, embeddedROS2Subscriber) {
+		return destination, nil
+	}
+	temporary, err := os.CreateTemp(directory, ".baize-ros2-subscriber-*")
+	if err != nil {
+		return "", err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(embeddedROS2Subscriber); err != nil {
+		_ = temporary.Close()
+		return "", err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return "", err
+	}
+	if err := temporary.Chmod(0o755); err != nil {
+		_ = temporary.Close()
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return "", err
+	}
+	return destination, nil
 }
 
 func parseInstallOptions(arguments []string) (installOptions, error) {
@@ -136,6 +201,9 @@ func install(options installOptions, executablePath string) error {
 	}
 	if err := installBinary(executablePath); err != nil {
 		return err
+	}
+	if err := writeFileAtomic(installedROS2Subscriber, embeddedROS2Subscriber, 0o755, 0, 0); err != nil {
+		return fmt.Errorf("install ROS2 subscriber: %w", err)
 	}
 	if plan.replace {
 		if err := writeFileAtomic(installedConfig, plan.content, 0o640, 0, groupID); err != nil {
@@ -478,7 +546,7 @@ func containsControl(value string) bool {
 }
 
 func serviceUnit() string {
-	return "[Unit]\nDescription=Baize robot monitoring agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=ubuntu\nGroup=ubuntu\nWorkingDirectory=/opt/baize/agent\nExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml\nRestart=always\nRestartSec=3\nEnvironment=ROS_LOG_DIR=/var/log/baize-agent/ros\nLogsDirectory=baize-agent\nLogsDirectoryMode=0750\nNoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nReadOnlyPaths=/opt/baize/agent\nPrivateTmp=true\nProtectKernelTunables=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\n\n[Install]\nWantedBy=multi-user.target\n"
+	return "[Unit]\nDescription=Baize robot monitoring agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=ubuntu\nGroup=ubuntu\nWorkingDirectory=/opt/baize/agent\nExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml\nRestart=always\nRestartSec=3\nEnvironment=ROS_LOG_DIR=/var/log/baize-agent/ros\nLogsDirectory=baize-agent\nLogsDirectoryMode=0750\nStateDirectory=baize-agent\nStateDirectoryMode=0750\nNoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nReadOnlyPaths=/opt/baize/agent\nPrivateTmp=true\nProtectKernelTunables=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\n\n[Install]\nWantedBy=multi-user.target\n"
 }
 
 const serviceUsage = `Usage: baize-agent service <command>

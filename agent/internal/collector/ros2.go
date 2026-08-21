@@ -1,23 +1,26 @@
 package collector
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"baize/agent/internal/config"
 	"baize/shared/model"
 )
 
-//go:embed ros2_subscriber.py
-var ros2SubscriberScript string
+const defaultROS2SubscriberBinary = "/opt/baize/agent/baize-ros2-subscriber"
 
 func rosSubscriberCommand(setup []string, environment map[string]string, user, topic, messageType string) (string, error) {
 	if topic == "" || messageType == "" {
 		return "", fmt.Errorf("ROS2 subscriber topic and message type are required")
 	}
-	arguments := "python3 -u -c " + shellQuote(ros2SubscriberScript) +
+	binary := os.Getenv("BAIZE_ROS2_SUBSCRIBER")
+	if binary == "" {
+		binary = defaultROS2SubscriberBinary
+	}
+	arguments := shellQuote(binary) +
 		" --topic " + shellQuote(topic) + " --message-type " + shellQuote(messageType)
 	return rosCommand(setup, environment, user, arguments)
 }
