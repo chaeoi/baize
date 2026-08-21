@@ -155,7 +155,28 @@ func TestDefaultConfigIsGeneratedButIntentionallyInvalid(t *testing.T) {
 func TestServiceUnitRunsInstalledBinaryWithConfig(t *testing.T) {
 	unit := serviceUnit()
 	expected := "ExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml"
-	if !strings.Contains(unit, expected) || !strings.Contains(unit, "User=ubuntu") || !strings.Contains(unit, "NoNewPrivileges=true") {
+	if !strings.Contains(unit, expected) || !strings.Contains(unit, "User=ubuntu") || !strings.Contains(unit, "StateDirectory=baize-agent") || !strings.Contains(unit, "NoNewPrivileges=true") {
 		t.Fatalf("unexpected service unit: %s", unit)
+	}
+}
+
+func TestPrepareROS2SubscriberMaterializesEmbeddedAsset(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("BAIZE_ROS2_SUBSCRIBER", "")
+	t.Setenv("STATE_DIRECTORY", directory)
+	path, err := PrepareROS2Subscriber()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(embeddedROS2Subscriber) || info.Mode().Perm() != 0o755 {
+		t.Fatalf("unexpected materialized ROS2 subscriber: path=%s mode=%o", path, info.Mode().Perm())
 	}
 }

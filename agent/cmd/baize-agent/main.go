@@ -76,6 +76,12 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Config) error {
+	ros2Subscriber, err := service.PrepareROS2Subscriber()
+	if err != nil {
+		slog.Warn("prepare ROS2 subscriber", "error", err)
+	} else if err := os.Setenv("BAIZE_ROS2_SUBSCRIBER", ros2Subscriber); err != nil {
+		return fmt.Errorf("configure ROS2 subscriber: %w", err)
+	}
 	hostname, _ := os.Hostname()
 	httpClient := &http.Client{Timeout: cfg.Agent.HTTPTimeout.Value()}
 	dashboardClient := agent.NewClient(cfg.Agent.DashboardURL, cfg.Agent.Token, httpClient)

@@ -14,6 +14,8 @@ RestartSec=3
 Environment=ROS_LOG_DIR=/var/log/baize-agent/ros
 LogsDirectory=baize-agent
 LogsDirectoryMode=0750
+StateDirectory=baize-agent
+StateDirectoryMode=0750
 
 NoNewPrivileges=true
 

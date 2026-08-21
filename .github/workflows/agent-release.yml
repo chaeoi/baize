@@ -9,6 +9,7 @@ on:
       - agent/cmd/**
       - agent/internal/**
       - agent/deploy/**
+      - agent/ros2_subscriber/**
       - shared/model/**
       - shared/robotmodel/**
       - .github/workflows/agent-release.yml
@@ -22,8 +23,25 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  go-test:
+    name: 测试 Go Agent
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+      - name: 设置 Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 测试
+        run: |
+          go test ./...
+          go vet ./...
+
+  build-agent:
     name: 构建 Linux Agent (${{ matrix.arch }})
+    needs: [go-test, build-subscriber]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
@@ -41,16 +59,22 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: 测试
+      - name: 下载对应架构的 ROS2 Subscriber
+        uses: actions/download-artifact@v7
+        with:
+          name: baize-subscriber-${{ matrix.arch }}
+          path: subscriber-dist
+
+      - name: 嵌入 ROS2 Subscriber
         run: |
-          go test ./...
-          go vet ./...
+          cp "subscriber-dist/baize-ros2-subscriber-linux-${{ matrix.arch }}" \
+            agent/internal/service/baize-ros2-subscriber
 
       - name: 计算日期版本
         id: version
         run: |
           set -euo pipefail
-          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy shared/model shared/robotmodel .github/workflows/agent-release.yml)
+          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/ros2_subscriber shared/model shared/robotmodel .github/workflows/agent-release.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
           echo "version=$(date -u -d "$commit_date" +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
@@ -79,9 +103,48 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-subscriber:
+    name: 构建 ROS2 C++ Subscriber (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    container: ros:humble-ros-base-jammy
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+      - name: 安装构建依赖
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake ros-humble-ament-cmake ros-humble-rclcpp \
+            ros-humble-sensor-msgs ros-humble-diagnostic-msgs
+      - name: 构建 C++ Subscriber
+        run: |
+          set -euo pipefail
+          . /opt/ros/humble/setup.sh
+          cmake -S agent/ros2_subscriber -B build/baize-ros2-subscriber -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/baize-ros2-subscriber --parallel
+          mkdir -p dist
+          cp build/baize-ros2-subscriber/baize-ros2-subscriber dist/baize-ros2-subscriber-linux-${{ matrix.arch }}
+          ldd dist/baize-ros2-subscriber-linux-${{ matrix.arch }} | tee dist/ldd-${{ matrix.arch }}.txt
+          ! grep -q 'not found' dist/ldd-${{ matrix.arch }}.txt
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: baize-subscriber-${{ matrix.arch }}
+          path: dist/baize-ros2-subscriber-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: 发布 GitHub Release
-    needs: build
+    needs: [build-agent, build-subscriber]
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
@@ -92,7 +155,7 @@ jobs:
       - name: 下载 Agent 构建产物
         uses: actions/download-artifact@v7
         with:
-          pattern: baize-agent-*
+          pattern: baize-*
           merge-multiple: true
           path: dist
 
@@ -100,11 +163,11 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy shared/model shared/robotmodel .github/workflows/agent-release.yml)
+          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/ros2_subscriber shared/model shared/robotmodel .github/workflows/agent-release.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
           version="$(date -u -d "$commit_date" +%Y%m%d)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          (cd dist && sha256sum baize-agent-linux-* > SHA256SUMS)
+          (cd dist && sha256sum baize-agent-linux-* baize-ros2-subscriber-linux-* > SHA256SUMS)
 
       - name: 移动日期标签
         env:
@@ -133,8 +196,10 @@ jobs:
           gh release create "$VERSION" \
             dist/baize-agent-linux-amd64 \
             dist/baize-agent-linux-arm64 \
+            dist/baize-ros2-subscriber-linux-amd64 \
+            dist/baize-ros2-subscriber-linux-arm64 \
             dist/SHA256SUMS \
             --target "$GITHUB_SHA" \
             --title "Baize Agent $VERSION" \
-            --notes "白泽 Agent 日期版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态二进制和 SHA256SUMS。配置示例保留在源码仓库中。" \
+            --notes "白泽 Agent 日期版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态 Agent、ROS2 C++ Subscriber 和 SHA256SUMS。配置示例保留在源码仓库中。" \
             --latest

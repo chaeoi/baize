@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "baize-ros2-subscriber is not embedded in this development build" >&2
+exit 127

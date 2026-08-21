@@ -1,14 +1,10 @@
 package collector
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -34,7 +30,7 @@ type MotorCollector struct {
 	ready        chan struct{}
 	mu           sync.Mutex
 	latest       model.MotorSnapshot
-	scratch      []model.MotorState
+	streamNames  []string
 	pending      []model.MotorSample
 	pendingHead  int
 	pendingCount int
@@ -66,32 +62,18 @@ func (c *MotorCollector) collectOnce(ctx context.Context) (model.MotorSnapshot, 
 	}
 	readCtx, cancel := context.WithTimeout(ctx, c.config.ReadTimeout.Value())
 	defer cancel()
-	command, err := rosCommand(c.config.ROSSetup, c.config.ROSEnvironment, c.config.ROSUser,
-		"ros2 topic echo --no-daemon --once "+shellQuote(c.config.Topic)+" "+shellQuote(c.config.MessageType))
+	command, err := rosSubscriberCommand(c.config.ROSSetup, c.config.ROSEnvironment, c.config.ROSUser, c.config.Topic, c.config.MessageType)
 	if err != nil {
 		return snapshot, err
 	}
-	cmd := exec.CommandContext(readCtx, "/bin/bash", "-lc", command)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
-	if err != nil {
-		if errors.Is(readCtx.Err(), context.DeadlineExceeded) {
-			return snapshot, fmt.Errorf("topic read timed out after %s", c.config.ReadTimeout.Value())
-		}
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
-			message = err.Error()
-		}
-		return snapshot, fmt.Errorf("ros2 topic read: %s", message)
+	if err := c.readBinaryOnceProcess(readCtx, command); err != nil {
+		return snapshot, fmt.Errorf("ROS2 topic read: %w", err)
 	}
-	motors, err := parseJointState(output, c.config.JointLabels, c.config.Definitions)
-	if err != nil {
-		return snapshot, err
-	}
-	snapshot.TopicOnline = true
-	snapshot.SampledAt = time.Now().UTC()
-	snapshot.Motors = motors
+	c.mu.Lock()
+	snapshot = cloneMotorSnapshot(c.latest)
+	c.mu.Unlock()
+	snapshot.Samples = nil
+	snapshot.SampleRateHz = 0
 	return snapshot, nil
 }
 
@@ -150,114 +132,73 @@ func (c *MotorCollector) readStreamProcess(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := c.readBinaryProcess(ctx, command); err == nil || ctx.Err() != nil {
-		return err
-	}
-	// Keep compatibility with older ROS installations and the test shim. The
-	// optimized subscriber is always selected first on a normal robot.
-	legacy, legacyErr := rosCommand(c.config.ROSSetup, c.config.ROSEnvironment, c.config.ROSUser,
-		"ros2 topic echo --no-daemon "+shellQuote(c.config.Topic)+" "+shellQuote(c.config.MessageType))
-	if legacyErr != nil {
-		return err
-	}
-	return c.readProcess(ctx, legacy)
+	return c.readBinaryProcess(ctx, command)
 }
 
-func (c *MotorCollector) readProcess(ctx context.Context, command string) error {
-	cmd := exec.CommandContext(ctx, "/bin/bash", "-lc", command)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
+func (c *MotorCollector) consumeMotorValues(names []string, positions, velocities, efforts []float64, sampledAt time.Time) error {
+	count := len(names)
+	if count == 0 || len(positions) != count || len(velocities) != count || len(efforts) != count {
+		return fmt.Errorf("JointState array size mismatch: name=%d position=%d velocity=%d effort=%d",
+			count, len(positions), len(velocities), len(efforts))
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	stderrDone := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(io.Discard, stderr)
-		close(stderrDone)
-	}()
-
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 16*1024), 2*1024*1024)
-	var message strings.Builder
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "{") {
-			c.consumeStreamMessage([]byte(line))
-			continue
-		}
-		if line == "---" {
-			c.consumeStreamMessage([]byte(message.String()))
-			message.Reset()
-			continue
-		}
-		message.WriteString(line)
-		message.WriteByte('\n')
-	}
-	if message.Len() > 0 {
-		c.consumeStreamMessage([]byte(message.String()))
-	}
-	if err := scanner.Err(); err != nil {
-		_ = cmd.Process.Kill()
-		<-stderrDone
-		_ = cmd.Wait()
-		return err
-	}
-	<-stderrDone
-	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
-		return fmt.Errorf("ROS topic stream exited: %w", err)
-	}
-	return nil
-}
-
-func (c *MotorCollector) consumeStreamMessage(data []byte) {
-	if len(bytes.TrimSpace(data)) == 0 {
-		return
-	}
-	motors, sampledAt, err := parseMotorMessage(data, c.config.JointLabels, c.config.Definitions)
-	if err != nil {
-		c.mu.Lock()
-		c.streamErr = err
-		c.mu.Unlock()
-		return
-	}
-	c.consumeMotorStates(motors, sampledAt)
-}
-
-func (c *MotorCollector) consumeMotorStates(motors []model.MotorState, sampledAt time.Time) {
 	now := sampledAt
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 	c.mu.Lock()
-	c.latest = model.MotorSnapshot{Enabled: true, Source: "ros2_joint_state", Topic: c.config.Topic, TopicOnline: true, SampledAt: now, Motors: motors, SampleRateHz: c.config.FastSampleRateHz}
-	index := c.appendPendingLocked(model.MotorSample{At: now})
-	c.pending[index].Motors = compactMotorStatesInto(c.pending[index].Motors, motors)
+	if !sameStrings(c.streamNames, names) {
+		c.streamNames = append(c.streamNames[:0], names...)
+		c.latest.Motors = make([]model.MotorState, count)
+		for index, name := range names {
+			definition := c.config.Definitions[name]
+			c.latest.Motors[index] = model.MotorState{
+				ID: name, Label: c.config.JointLabels[name], Brand: definition.Brand,
+				Model: definition.Model, CANInterface: definition.CANInterface,
+				ControlMode: definition.ControlMode, VirtualJoint: definition.VirtualJoint,
+			}
+		}
+	}
+	for index := range names {
+		c.latest.Motors[index].PositionRad = positions[index]
+		c.latest.Motors[index].VelocityRadPerSec = velocities[index]
+		c.latest.Motors[index].TorqueNm = efforts[index]
+	}
+	c.latest.Enabled = true
+	c.latest.Source = "ros2_joint_state"
+	c.latest.Topic = c.config.Topic
+	c.latest.TopicOnline = true
+	c.latest.SampledAt = now
+	c.latest.SampleRateHz = c.config.FastSampleRateHz
+	pendingIndex := c.appendPendingLocked(model.MotorSample{At: now})
+	compact := c.pending[pendingIndex].Motors
+	if cap(compact) < count {
+		compact = make([]model.MotorSampleState, count)
+	} else {
+		compact = compact[:count]
+	}
+	for index, motor := range c.latest.Motors {
+		compact[index] = model.MotorSampleState{
+			ID: motor.ID, Label: motor.Label, PositionRad: positions[index],
+			VelocityRadPerSec: velocities[index], TorqueNm: efforts[index],
+		}
+	}
+	c.pending[pendingIndex].Motors = compact
 	c.streamErr = nil
 	c.mu.Unlock()
 	c.readyOnce.Do(func() { close(c.ready) })
+	return nil
 }
 
-func (c *MotorCollector) consumeMotorValues(names []string, positions, velocities, efforts []float64, sampledAt time.Time) error {
-	c.mu.Lock()
-	motors, err := motorStatesInto(c.scratch, names, positions, velocities, efforts, c.config.JointLabels, c.config.Definitions)
-	if err == nil {
-		c.scratch = motors
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
 	}
-	c.mu.Unlock()
-	if err != nil {
-		return err
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
 	}
-	c.consumeMotorStates(motors, sampledAt)
-	return nil
+	return true
 }
 
 func (c *MotorCollector) appendPendingLocked(sample model.MotorSample) int {
@@ -317,26 +258,6 @@ func cloneMotorStates(motors []model.MotorState) []model.MotorState {
 		return nil
 	}
 	return append([]model.MotorState(nil), motors...)
-}
-
-func compactMotorStates(motors []model.MotorState) []model.MotorSampleState {
-	return compactMotorStatesInto(nil, motors)
-}
-
-func compactMotorStatesInto(result []model.MotorSampleState, motors []model.MotorState) []model.MotorSampleState {
-	if cap(result) < len(motors) {
-		result = make([]model.MotorSampleState, len(motors))
-	} else {
-		result = result[:len(motors)]
-	}
-	for index, motor := range motors {
-		velocity := motor.VelocityRadPerSec
-		if velocity == 0 && motor.VelocityRPS != 0 {
-			velocity = motor.VelocityRPS
-		}
-		result[index] = model.MotorSampleState{ID: motor.ID, Label: motor.Label, PositionRad: motor.PositionRad, VelocityRadPerSec: velocity, TorqueNm: motor.TorqueNm}
-	}
-	return result
 }
 
 func parseJointState(data []byte, labels map[string]string, definitions map[string]config.MotorDefinition) ([]model.MotorState, error) {
