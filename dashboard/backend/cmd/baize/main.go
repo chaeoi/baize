@@ -24,7 +24,7 @@ func main() {
 		slog.Error("validate embedded robot models", "error", err)
 		os.Exit(2)
 	}
-	configPath := flag.String("config", "/opt/baize/dashboard/config.yml", "Dashboard configuration file")
+	configPath := flag.String("config", "/dashboard/data/config.yaml", "Dashboard configuration file")
 	checkConfig := flag.Bool("check-config", false, "validate Dashboard configuration and exit")
 	flag.Parse()
 	cfg, err := dashboardconfig.Load(*configPath)

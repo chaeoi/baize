@@ -45,16 +45,16 @@ type DashboardConfig struct {
 	CookieSecure           bool
 }
 
-// Default is compiled into the Dashboard image and copied out as the default
-// configuration file for deployments to adjust.
+// Default is compiled into the Dashboard image and used to seed the persistent
+// configuration file on first startup.
 func Default() Config {
 	return Config{Dashboard: DashboardConfig{
 		AdminUser:              "admin",
 		AdminPassword:          DefaultAdminPassword,
 		PasswordChangeRequired: true,
 		Listen:                 ":8080",
-		DataDir:                "/data/control",
-		HistoryDataDir:         "/data/history",
+		DataDir:                "/dashboard/data/control",
+		HistoryDataDir:         "/dashboard/data/history",
 		HistoryRetention:       Duration(90 * 24 * time.Hour),
 		HistorySampleInterval:  Duration(time.Minute),
 		FrontendDir:            "/opt/baize/dashboard/frontend",

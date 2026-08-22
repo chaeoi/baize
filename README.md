@@ -1,8 +1,8 @@
 # 白泽 Baize
 
 白泽由机器人端 Agent 和管理 Dashboard 组成。Dashboard 的控制数据保存在独立的
-SQLite 数据库 `/data/control/control.db`；监控历史保存在嵌入式 VictoriaMetrics TSDB
-目录 `/data/history/host` 与 `/data/history/motor`，不需要额外数据库容器。迁移时只复制
+SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌入式 VictoriaMetrics TSDB
+目录 `/dashboard/data/history/host` 与 `/dashboard/data/history/motor`，不需要额外数据库容器。迁移时只复制
 `control` 即可保留机器人身份、备注、管理员账号、发布版本和 Dashboard 密钥；历史目录可按
 保留策略丢弃。旧版 `history.db` 不再读取或迁移。
 
@@ -13,22 +13,21 @@ SQLite 数据库 `/data/control/control.db`；监控历史保存在嵌入式 Vic
 型号能力维护在 `shared/robotmodel/models.yml` 的单文件 YAML catalogue 中，GitHub
 构建时同时嵌入 Agent 二进制和 Dashboard Docker：Agent 只读取 ROS2 状态话题，BMS CAN
 查询由独立的 [`batcan`](https://github.com/chaeoi/batcan) 服务负责。部署仍使用
-`config.yml` 管理监听地址、身份和通用采集策略，但不允许通过 YAML 修改型号 profile。
+`config.yaml` 管理监听地址、身份和通用采集策略，但不允许通过 YAML 修改型号 profile。
 
 ## Dashboard
 
-Dashboard 镜像自带配置样例。首次启动时会在 `/data/control/control.db` 中生成
-Agent token 和 JWT 密钥。默认管理员是 `admin`，默认密码 `Baize@Admin1`，首次
-登录后强制修改。生产配置应由 root 保存为 `0600`。
+Dashboard 镜像自带配置样例。首次启动时会在数据卷中自动生成
+`/dashboard/data/config.yaml`（已有文件会直接复用），并在
+`/dashboard/data/control/control.db` 中生成 Agent token 和 JWT 密钥。默认管理员是
+`admin`，默认密码 `Baize@Admin1`，首次登录后强制修改。生产配置应由 root 保存为 `0600`。
 
 ```bash
-sudo install -d -m 0750 /opt/baize/dashboard/data
-sudo install -m 0600 dashboard/config.yml.example /opt/baize/dashboard/config.yml
-docker pull chaeoi/baize:latest
-docker run -d --name baize --restart unless-stopped \
+docker run -d \
+  --name baize \
+  --restart always \
   --network host \
-  -v /opt/baize/dashboard/config.yml:/opt/baize/dashboard/config.yml:ro \
-  -v /opt/baize/dashboard/data:/data \
+  -v /opt/baize/dashboard/data:/dashboard/data \
   chaeoi/baize:latest
 ```
 

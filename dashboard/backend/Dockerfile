@@ -21,10 +21,12 @@ COPY shared/robotmodel ./shared/robotmodel
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/baize ./dashboard/backend/cmd/baize
 
 FROM ${RUNTIME_IMAGE}
-RUN mkdir -p /data/control /data/history
+RUN mkdir -p /dashboard/data
 COPY --from=backend-builder /out/baize /opt/baize/dashboard/bin/baize
 COPY dashboard/frontend /opt/baize/dashboard/frontend
-COPY dashboard/config.yml.example /opt/baize/dashboard/config.yml
+COPY dashboard/config.yml.example /opt/baize/dashboard/config.yaml.example
+COPY dashboard/backend/entrypoint.sh /opt/baize/dashboard/bin/entrypoint.sh
+RUN chmod 0755 /opt/baize/dashboard/bin/entrypoint.sh
 EXPOSE 8080
-VOLUME ["/data"]
-ENTRYPOINT ["/opt/baize/dashboard/bin/baize", "--config", "/opt/baize/dashboard/config.yml"]
+VOLUME ["/dashboard/data"]
+ENTRYPOINT ["/opt/baize/dashboard/bin/entrypoint.sh"]
