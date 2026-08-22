@@ -32,4 +32,7 @@ func TestDefaultAdminRequiresPasswordChange(t *testing.T) {
 	if cfg.Dashboard.AdminPassword != DefaultAdminPassword || !cfg.Dashboard.PasswordChangeRequired {
 		t.Fatalf("unexpected bootstrap credentials: %+v", cfg.Dashboard)
 	}
+	if cfg.Dashboard.DataDir != "/dashboard/data/control" || cfg.Dashboard.HistoryDataDir != "/dashboard/data/history" {
+		t.Fatalf("unexpected default data paths: %+v", cfg.Dashboard)
+	}
 }
