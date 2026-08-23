@@ -1,7 +1,4 @@
 dashboard:
-  admin_user: "admin"
-  admin_password: "Baize@Admin1"
-  password_change_required: true
   listen: ":8080"
   data_dir: "/dashboard/data/control"
   history_data_dir: "/dashboard/data/history"
