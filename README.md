@@ -3,7 +3,7 @@
 白泽由机器人端 Agent 和管理 Dashboard 组成。Dashboard 的控制数据保存在独立的
 SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌入式 VictoriaMetrics TSDB
 目录 `/dashboard/data/history/host` 与 `/dashboard/data/history/motor`，不需要额外数据库容器。迁移时只复制
-`control` 即可保留机器人身份、备注、管理员账号、发布版本和 Dashboard 密钥；历史目录可按
+`control` 即可保留机器人身份、备注、管理员账号、发布版本和 Dashboard JWT 密钥；历史目录可按
 保留策略丢弃。旧版 `history.db` 不再读取或迁移。
 
 主机、电池、GPU 和电机摘要按 `history_sample_interval`（默认 1 分钟）写入 `host`，
@@ -19,12 +19,12 @@ SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌
 
 Dashboard 镜像自带配置样例。首次启动时会在数据卷中自动生成
 `/dashboard/data/config.yaml`（已有文件会直接复用），并在
-`/dashboard/data/control/control.db` 中保存 JWT 密钥和自动生成的 Agent token。唯一管理员账号固定为
+`/dashboard/data/control/control.db` 中保存 JWT 密钥。唯一管理员账号固定为
 `admin`，首次登录使用初始密码 `123456`，登录后强制修改。生产配置应由 root 保存为 `0600`。
 
 `dashboard.agent_token` 可直接填写 Agent 使用的 Bearer 密钥，至少 12 个字符；留空时
-Dashboard 会首次启动自动生成密钥并保存到 control DB。修改配置后重启容器，所有 Agent
-必须使用新的密钥。
+Dashboard 会首次启动生成随机密钥并写回 `/dashboard/data/config.yaml`。Agent 密钥只有这一个
+配置来源，修改配置后重启容器，所有 Agent 必须使用新的密钥。
 
 ```bash
 docker run -d \
@@ -44,7 +44,7 @@ curl --cookie 'baize_session=<session-cookie>' \
 
 修改 `dashboard.listen` 即可改变监听端口。例如 Cloudflare Tunnel 的本地 service
 为 `http://127.0.0.1:5037` 时，配置 `listen: "127.0.0.1:5037"`。JWT 密钥始终保存在
-control DB；Agent token 可按需写入 YAML，也可以留空后由 Dashboard 自动生成。
+control DB；Agent token 始终来自 YAML。
 
 公开数据接口为 `GET /api/v1/robots`、`GET /api/v1/robots/{public_id}/history`
 及 `wss://<host>/api/v1/ws/robots`。接口允许跨域只读嵌入，并且不暴露 UUID、

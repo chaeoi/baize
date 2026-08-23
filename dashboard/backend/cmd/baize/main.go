@@ -36,6 +36,19 @@ func main() {
 		fmt.Println("config is valid")
 		return
 	}
+	agentToken := cfg.Dashboard.AgentToken
+	if agentToken == "" {
+		agentToken, err = dashboardconfig.NewAgentToken()
+		if err != nil {
+			slog.Error("generate Dashboard agent token", "error", err)
+			os.Exit(1)
+		}
+		if err := dashboardconfig.WriteAgentToken(*configPath, agentToken); err != nil {
+			slog.Error("save Dashboard agent token", "error", err, "path", *configPath)
+			os.Exit(1)
+		}
+		slog.Info("Dashboard agent token initialized in configuration", "path", *configPath)
+	}
 	store, err := dashboard.NewStore(cfg.Dashboard.DataDir, cfg.Dashboard.HistoryDataDir, dashboard.StoreOptions{
 		AdminUser: dashboardconfig.AdminUsername, BootstrapPassword: dashboardconfig.DefaultAdminPassword,
 		RequirePasswordChange: true,
@@ -46,22 +59,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
-	agentToken := cfg.Dashboard.AgentToken
-	agentTokenCreated := false
-	if agentToken == "" {
-		agentToken, agentTokenCreated, err = store.Secret("agent_token", 32)
-		if err != nil {
-			slog.Error("load Dashboard agent token", "error", err)
-			os.Exit(1)
-		}
-	}
 	jwtSecret, jwtSecretCreated, err := store.Secret("jwt_secret", 32)
 	if err != nil {
 		slog.Error("load Dashboard JWT secret", "error", err)
 		os.Exit(1)
 	}
-	if agentTokenCreated || jwtSecretCreated {
-		slog.Warn("Dashboard control secrets initialized", "agent_token_created", agentTokenCreated, "jwt_secret_created", jwtSecretCreated)
+	if jwtSecretCreated {
+		slog.Warn("Dashboard control secrets initialized", "jwt_secret_created", true)
 	}
 	handler := dashboard.NewServer(dashboard.ServerConfig{
 		AgentToken: agentToken, AdminUser: dashboardconfig.AdminUsername,
