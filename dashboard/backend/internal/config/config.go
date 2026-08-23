@@ -10,7 +10,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const DefaultAdminPassword = "Baize@Admin1"
+const (
+	AdminUsername        = "admin"
+	DefaultAdminPassword = "123456"
+)
 
 type Duration time.Duration
 
@@ -33,35 +36,32 @@ type Config struct {
 }
 
 type DashboardConfig struct {
-	AdminUser              string
-	AdminPassword          string
-	PasswordChangeRequired bool
-	Listen                 string
-	DataDir                string
-	HistoryDataDir         string
-	HistoryRetention       Duration
-	HistorySampleInterval  Duration
-	FrontendDir            string
-	CookieSecure           bool
+	Listen                string
+	DataDir               string
+	HistoryDataDir        string
+	HistoryRetention      Duration
+	HistorySampleInterval Duration
+	FrontendDir           string
+	CookieSecure          bool
 }
 
 // Default is compiled into the Dashboard image and used to seed the persistent
 // configuration file on first startup.
 func Default() Config {
 	return Config{Dashboard: DashboardConfig{
-		AdminUser:              "admin",
-		AdminPassword:          DefaultAdminPassword,
-		PasswordChangeRequired: true,
-		Listen:                 ":8080",
-		DataDir:                "/dashboard/data/control",
-		HistoryDataDir:         "/dashboard/data/history",
-		HistoryRetention:       Duration(90 * 24 * time.Hour),
-		HistorySampleInterval:  Duration(time.Minute),
-		FrontendDir:            "/opt/baize/dashboard/frontend",
+		Listen:                ":8080",
+		DataDir:               "/dashboard/data/control",
+		HistoryDataDir:        "/dashboard/data/history",
+		HistoryRetention:      Duration(90 * 24 * time.Hour),
+		HistorySampleInterval: Duration(time.Minute),
+		FrontendDir:           "/opt/baize/dashboard/frontend",
 	}}
 }
 
 type fileDashboardConfig struct {
+	// Deprecated authentication fields remain recognized so older persistent
+	// config files continue to load. Authentication is fixed to the built-in
+	// admin account and these values are ignored.
 	AdminUser              *string   `yaml:"admin_user"`
 	AdminPassword          *string   `yaml:"admin_password"`
 	PasswordChangeRequired *bool     `yaml:"password_change_required"`
@@ -97,15 +97,6 @@ func Load(path string) (Config, error) {
 		return cfg, errors.New("dashboard configuration is required")
 	}
 	d := file.Dashboard
-	if d.AdminUser != nil {
-		cfg.Dashboard.AdminUser = *d.AdminUser
-	}
-	if d.AdminPassword != nil {
-		cfg.Dashboard.AdminPassword = *d.AdminPassword
-	}
-	if d.PasswordChangeRequired != nil {
-		cfg.Dashboard.PasswordChangeRequired = *d.PasswordChangeRequired
-	}
 	if d.Listen != nil {
 		cfg.Dashboard.Listen = *d.Listen
 	}
@@ -135,12 +126,6 @@ func Load(path string) (Config, error) {
 
 func (c Config) Validate() error {
 	d := c.Dashboard
-	if strings.TrimSpace(d.AdminUser) == "" || strings.ContainsAny(d.AdminUser, "\r\n\t ") {
-		return errors.New("dashboard.admin_user must be a non-empty username without whitespace")
-	}
-	if strings.TrimSpace(d.AdminPassword) == "" {
-		return errors.New("dashboard.admin_password must not be empty")
-	}
 	if strings.TrimSpace(d.Listen) == "" {
 		return errors.New("dashboard.listen must not be empty")
 	}

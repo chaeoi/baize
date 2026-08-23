@@ -27,10 +27,24 @@ func TestLoadDashboardConfig(t *testing.T) {
 	}
 }
 
-func TestDefaultAdminRequiresPasswordChange(t *testing.T) {
+func TestLoadLegacyAuthenticationFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`dashboard:
+  admin_user: legacy-admin
+  admin_password: legacy-password
+  password_change_required: false
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("legacy authentication fields must remain loadable: %v", err)
+	}
+}
+
+func TestDefaultAdminCredentials(t *testing.T) {
 	cfg := Default()
-	if cfg.Dashboard.AdminPassword != DefaultAdminPassword || !cfg.Dashboard.PasswordChangeRequired {
-		t.Fatalf("unexpected bootstrap credentials: %+v", cfg.Dashboard)
+	if AdminUsername != "admin" || DefaultAdminPassword != "123456" {
+		t.Fatalf("unexpected bootstrap credentials: user=%q password=%q", AdminUsername, DefaultAdminPassword)
 	}
 	if cfg.Dashboard.DataDir != "/dashboard/data/control" || cfg.Dashboard.HistoryDataDir != "/dashboard/data/history" {
 		t.Fatalf("unexpected default data paths: %+v", cfg.Dashboard)

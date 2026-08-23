@@ -37,8 +37,8 @@ func main() {
 		return
 	}
 	store, err := dashboard.NewStore(cfg.Dashboard.DataDir, cfg.Dashboard.HistoryDataDir, dashboard.StoreOptions{
-		AdminUser: cfg.Dashboard.AdminUser, BootstrapPassword: cfg.Dashboard.AdminPassword,
-		RequirePasswordChange: cfg.Dashboard.PasswordChangeRequired,
+		AdminUser: dashboardconfig.AdminUsername, BootstrapPassword: dashboardconfig.DefaultAdminPassword,
+		RequirePasswordChange: true,
 		HistoryRetention:      cfg.Dashboard.HistoryRetention.Value(), HistorySampleInterval: cfg.Dashboard.HistorySampleInterval.Value(),
 	})
 	if err != nil {
@@ -60,7 +60,7 @@ func main() {
 		slog.Warn("Dashboard control secrets initialized", "agent_token_created", agentTokenCreated, "jwt_secret_created", jwtSecretCreated)
 	}
 	handler := dashboard.NewServer(dashboard.ServerConfig{
-		AgentToken: agentToken, AdminUser: cfg.Dashboard.AdminUser,
+		AgentToken: agentToken, AdminUser: dashboardconfig.AdminUsername,
 		JWTSecret: jwtSecret, FrontendDir: cfg.Dashboard.FrontendDir, CookieSecure: cfg.Dashboard.CookieSecure,
 	}, store)
 	server := &http.Server{Addr: cfg.Dashboard.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
