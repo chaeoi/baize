@@ -1,4 +1,5 @@
 dashboard:
+  agent_token: ""
   listen: ":8080"
   data_dir: "/dashboard/data/control"
   history_data_dir: "/dashboard/data/history"

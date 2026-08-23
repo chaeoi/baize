@@ -46,10 +46,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
-	agentToken, agentTokenCreated, err := store.Secret("agent_token", 32)
-	if err != nil {
-		slog.Error("load Dashboard agent token", "error", err)
-		os.Exit(1)
+	agentToken := cfg.Dashboard.AgentToken
+	agentTokenCreated := false
+	if agentToken == "" {
+		agentToken, agentTokenCreated, err = store.Secret("agent_token", 32)
+		if err != nil {
+			slog.Error("load Dashboard agent token", "error", err)
+			os.Exit(1)
+		}
 	}
 	jwtSecret, jwtSecretCreated, err := store.Secret("jwt_secret", 32)
 	if err != nil {

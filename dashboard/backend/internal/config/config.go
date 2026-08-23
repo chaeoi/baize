@@ -36,6 +36,7 @@ type Config struct {
 }
 
 type DashboardConfig struct {
+	AgentToken            string
 	Listen                string
 	DataDir               string
 	HistoryDataDir        string
@@ -49,6 +50,7 @@ type DashboardConfig struct {
 // configuration file on first startup.
 func Default() Config {
 	return Config{Dashboard: DashboardConfig{
+		AgentToken:            "",
 		Listen:                ":8080",
 		DataDir:               "/dashboard/data/control",
 		HistoryDataDir:        "/dashboard/data/history",
@@ -59,27 +61,23 @@ func Default() Config {
 }
 
 type fileDashboardConfig struct {
-	// Deprecated authentication fields remain recognized so older persistent
-	// config files continue to load. Authentication is fixed to the built-in
-	// admin account and these values are ignored.
-	AdminUser              *string   `yaml:"admin_user"`
-	AdminPassword          *string   `yaml:"admin_password"`
-	PasswordChangeRequired *bool     `yaml:"password_change_required"`
-	Listen                 *string   `yaml:"listen"`
-	DataDir                *string   `yaml:"data_dir"`
-	HistoryDataDir         *string   `yaml:"history_data_dir"`
-	HistoryRetention       *Duration `yaml:"history_retention"`
-	HistorySampleInterval  *Duration `yaml:"history_sample_interval"`
-	FrontendDir            *string   `yaml:"frontend_dir"`
-	CookieSecure           *bool     `yaml:"cookie_secure"`
+	AgentToken            *string   `yaml:"agent_token"`
+	Listen                *string   `yaml:"listen"`
+	DataDir               *string   `yaml:"data_dir"`
+	HistoryDataDir        *string   `yaml:"history_data_dir"`
+	HistoryRetention      *Duration `yaml:"history_retention"`
+	HistorySampleInterval *Duration `yaml:"history_sample_interval"`
+	FrontendDir           *string   `yaml:"frontend_dir"`
+	CookieSecure          *bool     `yaml:"cookie_secure"`
 }
 
 type fileConfig struct {
 	Dashboard *fileDashboardConfig `yaml:"dashboard"`
 }
 
-// Load applies an explicit deployment configuration. Agent and JWT secrets
-// intentionally remain in control.db and are never accepted from YAML.
+// Load applies an explicit deployment configuration. JWT secrets remain in
+// control.db; the Agent token may be supplied by configuration or generated
+// into control.db when omitted.
 func Load(path string) (Config, error) {
 	cfg := Default()
 	input, err := os.Open(path)
@@ -97,6 +95,9 @@ func Load(path string) (Config, error) {
 		return cfg, errors.New("dashboard configuration is required")
 	}
 	d := file.Dashboard
+	if d.AgentToken != nil {
+		cfg.Dashboard.AgentToken = *d.AgentToken
+	}
 	if d.Listen != nil {
 		cfg.Dashboard.Listen = *d.Listen
 	}
@@ -126,6 +127,12 @@ func Load(path string) (Config, error) {
 
 func (c Config) Validate() error {
 	d := c.Dashboard
+	if strings.IndexAny(d.AgentToken, " \t\r\n") >= 0 {
+		return errors.New("dashboard.agent_token must not contain whitespace")
+	}
+	if d.AgentToken != "" && len(d.AgentToken) < 12 {
+		return errors.New("dashboard.agent_token must contain at least 12 characters")
+	}
 	if strings.TrimSpace(d.Listen) == "" {
 		return errors.New("dashboard.listen must not be empty")
 	}
