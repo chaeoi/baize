@@ -44,7 +44,20 @@ curl --cookie 'baize_session=<session-cookie>' \
 
 修改 `dashboard.listen` 即可改变监听端口。例如 Cloudflare Tunnel 的本地 service
 为 `http://127.0.0.1:5037` 时，配置 `listen: "127.0.0.1:5037"`。JWT 密钥始终保存在
-control DB；Agent token 始终来自 YAML。
+control DB；Agent token 始终来自 YAML。Agent 使用错误密钥时，Dashboard 会将来源 IP、
+请求路径和错误密钥的短指纹写入容器日志，不会记录密钥明文。查看最近的失败连接：
+
+```bash
+docker logs --since 1h baize 2>&1 | grep 'invalid agent token'
+```
+
+持续观察新连接：
+
+```bash
+docker logs -f baize 2>&1 | grep 'invalid agent token'
+```
+
+日志中的 `remote_ip` 是直接 TCP 对端地址；若前面还有反向代理，默认看到的是代理 IP。
 
 公开数据接口为 `GET /api/v1/robots`、`GET /api/v1/robots/{public_id}/history`
 及 `wss://<host>/api/v1/ws/robots`。接口允许跨域只读嵌入，并且不暴露 UUID、

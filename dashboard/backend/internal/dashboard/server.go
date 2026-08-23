@@ -678,8 +678,18 @@ func (s *Server) releaseAction(writer http.ResponseWriter, request *http.Request
 
 func (s *Server) requireAgent(next http.HandlerFunc) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
-		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		authorization := request.Header.Get("Authorization")
+		token := strings.TrimPrefix(authorization, "Bearer ")
 		if !secureEqual(token, s.config.AgentToken) {
+			slog.Warn("invalid agent token",
+				"remote_ip", requestClientIP(request),
+				"remote_addr", request.RemoteAddr,
+				"method", request.Method,
+				"path", request.URL.Path,
+				"token_fingerprint", tokenFingerprint(token),
+				"authorization_present", authorization != "",
+				"user_agent", request.UserAgent(),
+			)
 			writeError(writer, http.StatusUnauthorized, "invalid agent token")
 			return
 		}
@@ -883,12 +893,16 @@ func (s *Server) secureCookie(request *http.Request) bool {
 	return s.config.CookieSecure || request.TLS != nil
 }
 
-func loginKey(request *http.Request) string {
+func requestClientIP(request *http.Request) string {
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err == nil {
 		return host
 	}
 	return request.RemoteAddr
+}
+
+func loginKey(request *http.Request) string {
+	return requestClientIP(request)
 }
 
 func (s *Server) loginAllowed(request *http.Request) bool {
@@ -925,6 +939,14 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(data), nil
+}
+
+func tokenFingerprint(token string) string {
+	if token == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])[:12]
 }
 
 func sanitizeVersion(version string) string {
