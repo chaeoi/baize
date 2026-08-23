@@ -52,3 +52,21 @@ func TestDefaultAdminCredentials(t *testing.T) {
 		t.Fatalf("unexpected default data paths: %+v", cfg.Dashboard)
 	}
 }
+
+func TestWriteAgentToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	contents := []byte("dashboard:\n  listen: \":8080\"\n  data_dir: \"/control\"\n  history_data_dir: \"/history\"\n")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAgentToken(path, "configured-agent-token"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dashboard.AgentToken != "configured-agent-token" {
+		t.Fatalf("unexpected agent token: %q", cfg.Dashboard.AgentToken)
+	}
+}

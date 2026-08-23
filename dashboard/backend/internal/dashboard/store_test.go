@@ -184,7 +184,7 @@ func TestControlSecretPersistsOutsideHistoryDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, created, err := store.Secret("agent_token", 32)
+	secret, created, err := store.Secret("jwt_secret", 32)
 	if err != nil || !created || len(secret) != 64 {
 		t.Fatalf("initial secret = %q created=%v err=%v", secret, created, err)
 	}
@@ -199,7 +199,7 @@ func TestControlSecretPersistsOutsideHistoryDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	reused, created, err := reopened.Secret("agent_token", 32)
+	reused, created, err := reopened.Secret("jwt_secret", 32)
 	if err != nil || created || reused != secret {
 		t.Fatalf("persistent secret = %q created=%v err=%v", reused, created, err)
 	}

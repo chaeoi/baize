@@ -1,7 +1,10 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,4 +158,89 @@ func (c Config) Validate() error {
 		return errors.New("dashboard.frontend_dir must be an absolute path")
 	}
 	return nil
+}
+
+// NewAgentToken returns a random token suitable for the Dashboard-Agent
+// bearer authentication header.
+func NewAgentToken() (string, error) {
+	data := make([]byte, 32)
+	if _, err := rand.Read(data); err != nil {
+		return "", fmt.Errorf("generate agent token: %w", err)
+	}
+	return hex.EncodeToString(data), nil
+}
+
+// WriteAgentToken updates the dashboard.agent_token scalar in an existing
+// YAML file without changing any other configuration values.
+func WriteAgentToken(path, token string) error {
+	input, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(input, &document); err != nil {
+		return err
+	}
+	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return errors.New("dashboard configuration must be a YAML mapping")
+	}
+	dashboard, ok := mappingValue(document.Content[0], "dashboard")
+	if !ok || dashboard.Kind != yaml.MappingNode {
+		return errors.New("dashboard configuration is required")
+	}
+	if value, ok := mappingValue(dashboard, "agent_token"); ok {
+		value.Kind = yaml.ScalarNode
+		value.Tag = "!!str"
+		value.Value = token
+		if value.Style == 0 {
+			value.Style = yaml.DoubleQuotedStyle
+		}
+	} else {
+		dashboard.Content = append(dashboard.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "agent_token"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: token, Style: yaml.DoubleQuotedStyle},
+		)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".config.yaml.*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(info.Mode().Perm()); err != nil {
+		temporary.Close()
+		return err
+	}
+	encoder := yaml.NewEncoder(temporary)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(&document); err != nil {
+		encoder.Close()
+		temporary.Close()
+		return err
+	}
+	if err := encoder.Close(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+func mappingValue(mapping *yaml.Node, key string) (*yaml.Node, bool) {
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Value == key {
+			return mapping.Content[index+1], true
+		}
+	}
+	return nil, false
 }
