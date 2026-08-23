@@ -204,6 +204,33 @@ func TestTelemetryAcceptsGzipMotorBatch(t *testing.T) {
 	}
 }
 
+func TestInvalidAgentTokenIsRejected(t *testing.T) {
+	store := newTestStore(t)
+	server := NewServer(ServerConfig{
+		AgentToken: "agent-token-long-enough-for-tests", AdminUser: "admin",
+		JWTSecret: "jwt-secret-long-enough-for-tests-123456",
+	}, store)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/telemetry", strings.NewReader(`{}`))
+	request.RemoteAddr = "203.0.113.10:4321"
+	request.Header.Set("Authorization", "Bearer wrong-agent-token")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid agent token status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestTokenFingerprintDoesNotExposeToken(t *testing.T) {
+	token := "wrong-agent-token"
+	fingerprint := tokenFingerprint(token)
+	if fingerprint == "" || len(fingerprint) != 12 || strings.Contains(fingerprint, token) {
+		t.Fatalf("unexpected token fingerprint %q", fingerprint)
+	}
+	if tokenFingerprint("") != "" {
+		t.Fatal("empty token should not be fingerprinted")
+	}
+}
+
 func TestPublicHistoryIsCrossOriginAndRedacted(t *testing.T) {
 	store := newTestStore(t)
 	uuid := "52446a60-7483-4ba7-b8c7-b85f60b2a00f"
