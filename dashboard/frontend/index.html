@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://registry.npmmirror.com" crossorigin>
   <link rel="stylesheet" href="https://registry.npmmirror.com/lxgw-wenkai-screen-web/1.522.0/files/style.css">
-  <link rel="stylesheet" href="/styles.css?v=2">
+  <link rel="stylesheet" href="/styles.css?v=3">
 </head>
 <body>
   <a id="skip-link" class="skip-link" href="#public-view">跳到主要内容</a>
@@ -105,11 +105,13 @@
           </section>
 
           <section class="public-history-section">
-            <div class="section-head public-history-head"><div><span class="eyebrow">Telemetry history</span><h2>运行趋势</h2></div><select id="public-history-range" class="compact-select" aria-label="公开历史范围"><option value="realtime" selected>实时</option><option value="1">1 小时</option><option value="6">6 小时</option><option value="12">12 小时</option><option value="24">1 天</option><option value="168">7 天</option><option value="720">30 天</option></select></div>
+            <div class="section-head public-history-head"><div><span class="eyebrow">Telemetry history</span><h2>运行趋势</h2></div><div class="public-history-head-actions"><span id="public-history-fixed-range" class="history-fixed-range hidden">最近 1 分钟</span><select id="public-history-range" class="compact-select" aria-label="公开历史范围"><option value="realtime" selected>实时</option><option value="1">1 小时</option><option value="6">6 小时</option><option value="12">12 小时</option><option value="24">1 天</option><option value="168">7 天</option><option value="720">30 天</option></select></div></div>
             <div class="public-history-toolbar">
               <div class="segmented-control" role="group" aria-label="趋势维度"><button type="button" class="active" data-public-mode="host">主机性能</button><button type="button" data-public-mode="motors">全部电机</button><button type="button" data-public-mode="single">单个电机</button></div>
               <select id="public-motor-select" class="compact-select hidden" aria-label="选择电机"></select>
               <select id="public-metric-select" class="compact-select hidden" aria-label="选择电机指标"><option value="torque_nm">转矩</option><option value="velocity_rad_per_sec">速度</option><option value="position_rad">位置</option></select>
+              <span id="public-recording-indicator" class="recording-indicator hidden"><i data-lucide="circle"></i><span>录制中</span></span>
+              <button id="public-download-button" class="button subtle" type="button" title="下载录制数据" disabled><i data-lucide="download"></i><span>下载录制</span></button>
             </div>
             <div id="public-history-empty" class="history-empty hidden" aria-live="polite"></div>
             <div id="public-chart-grid" class="chart-card-grid"></div>
@@ -145,6 +147,6 @@
   <dialog id="delete-robot-dialog"><form id="delete-robot-form" class="dialog-form"><div class="dialog-heading"><div><span class="eyebrow">Remove device</span><h2 id="delete-robot-title">删除设备</h2></div><button class="icon-button dialog-close" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><p class="dialog-copy">设备目录、备注、目标版本和该设备的历史采样将被删除。Agent 再次上报时会作为新接入设备出现。</p><div class="dialog-actions"><button class="button subtle dialog-close" type="button">取消</button><button class="button danger solid-danger" type="submit"><i data-lucide="trash-2"></i><span>确认删除</span></button></div></form></dialog>
   <div id="toast" class="toast" role="status"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script src="/app.js?v=2" defer></script>
+  <script src="/app.js?v=3" defer></script>
 </body>
 </html>

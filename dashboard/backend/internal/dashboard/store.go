@@ -793,6 +793,27 @@ func (s *Store) FastMotorHistory(uuid string, from, to time.Time, limit int) ([]
 	return points, nil
 }
 
+func (s *Store) FastMotorHistoryFiltered(uuid string, from, to time.Time, limit int, motorID string) ([]HistoryPoint, error) {
+	points, err := s.FastMotorHistory(uuid, from, to, limit)
+	if err != nil || motorID == "" {
+		return points, err
+	}
+	filtered := points[:0]
+	for _, point := range points {
+		motors := point.Motors[:0]
+		for _, motor := range point.Motors {
+			if motor.ID == motorID {
+				motors = append(motors, motor)
+			}
+		}
+		if len(motors) > 0 {
+			point.Motors = motors
+			filtered = append(filtered, point)
+		}
+	}
+	return filtered, nil
+}
+
 func (s *Store) AuthenticateAdmin(username, password string) (bool, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
