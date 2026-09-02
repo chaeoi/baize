@@ -192,16 +192,6 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 .chart-card-grid.single-mode .chart-card { width: 100%; }
 .recording-indicator { display: inline-flex; align-items: center; gap: 5px; color: #b23b45; font-size: 12px; font-weight: 720; }
 .recording-indicator svg { width: 11px; height: 11px; fill: currentColor; }
-.motor-overview { padding: 15px; background: #f8f9fa; }
-.motor-overview-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; color: var(--muted); font-size: 12px; }
-.motor-overview-meta strong { color: var(--ink); font-size: 14px; }
-.motor-overview-scroll { overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: 5px; }
-.motor-overview table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
-.motor-overview th, .motor-overview td { padding: 10px 13px; text-align: right; border-bottom: 1px solid var(--soft-line); white-space: nowrap; }
-.motor-overview th:first-child, .motor-overview td:first-child { text-align: left; }
-.motor-overview thead th { color: var(--muted); background: #f7f9fa; font-size: 11px; font-weight: 700; }
-.motor-overview tbody tr:last-child th, .motor-overview tbody tr:last-child td { border-bottom: 0; }
-.motor-overview tbody th { color: var(--ink); font-weight: 720; }
 
 .settings-view { min-height: calc(100vh - 62px); background: var(--canvas); }
 .settings-header { min-height: 95px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px max(24px, calc((100vw - 1480px) / 2)); background: #fff; border-bottom: 1px solid var(--line); }

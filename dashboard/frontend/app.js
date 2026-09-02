@@ -1026,10 +1026,6 @@ function drawPublicHistory(points) {
   const grid = $('#public-chart-grid');
   if (!grid || !selectedPublicRobot()) return;
   grid.classList.toggle('single-mode', state.publicHistoryMode === 'single');
-  if (state.publicHistoryMode === 'motors') {
-    renderMotorOverview(grid, points);
-    return;
-  }
   const specs = publicChartSpecs(points).map((spec) => ({ ...spec, values: finiteSeriesValues(points, spec) })).filter((spec) => spec.values.length > 0);
   const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, points[0]?.at, points.at(-1)?.at, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width), publicHistoryIsRealtime() ? Math.floor(Date.now() / 1000) : 0]);
   if (drawKey === state.publicHistoryDrawKey && grid.childElementCount) return;
@@ -1050,23 +1046,6 @@ function drawPublicHistory(points) {
   }).join('');
   $$('#public-chart-grid canvas').forEach((canvas) => drawSingleMetricChart(canvas, specs[Number(canvas.dataset.chartIndex)]));
   state.publicHistoryDrawKey = drawKey;
-}
-
-function renderMotorOverview(grid, points) {
-  const motors = motorDescriptors(points);
-  const metric = state.publicHistoryMetric;
-  const label = ({ torque_nm: '转矩', velocity_rad_per_sec: '速度', position_rad: '位置' })[metric] || metric;
-  const unit = ({ torque_nm: 'N·m', velocity_rad_per_sec: 'rad/s', position_rad: 'rad' })[metric] || '';
-  const rows = motors.map(({ id, index }) => {
-    const values = points.map((point) => Number(motorValue(point, id, index, metric))).filter(Number.isFinite);
-    if (!values.length) return '';
-    const latest = values.at(-1);
-    return `<tr><th scope="row">${escapeHTML(id)}</th><td>${escapeHTML(formatNumberWithUnit(latest, unit))}</td><td>${escapeHTML(formatNumberWithUnit(Math.min(...values), unit))}</td><td>${escapeHTML(formatNumberWithUnit(Math.max(...values), unit))}</td><td>${values.length}</td></tr>`;
-  }).filter(Boolean).join('');
-  grid.innerHTML = rows ? `<div class="motor-overview"><div class="motor-overview-meta"><strong>全部电机</strong><span>最近 1 分钟 · ${escapeHTML(label)}</span></div><div class="motor-overview-scroll"><table><thead><tr><th scope="col">电机 ID</th><th scope="col">当前</th><th scope="col">最小</th><th scope="col">最大</th><th scope="col">采样点</th></tr></thead><tbody>${rows}</tbody></table></div></div>` : '';
-  $('#public-history-empty').classList.toggle('hidden', Boolean(rows) || state.publicHistoryLoading);
-  if (!rows) $('#public-history-empty').textContent = points.length ? '当前指标暂无可用数据' : '暂无历史数据';
-  state.publicHistoryDrawKey = `overview:${state.publicHistoryRobot}:${state.publicHistoryMetric}:${points.length}:${points.at(-1)?.at}`;
 }
 
 function publicChartSpecs(points) {
