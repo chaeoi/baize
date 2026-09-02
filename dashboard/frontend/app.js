@@ -25,6 +25,7 @@ const state = {
   publicHistoryDrawKey: '',
   publicStreamOptions: null,
   publicRealtimeTicker: null,
+  publicRealtimeStartedAt: 0,
 };
 
 const PUBLIC_REALTIME_WINDOW_SECONDS = 30 * 60;
@@ -96,8 +97,7 @@ function bindEvents() {
       renderPublicHistoryControls();
       drawPublicHistory(state.publicHistory);
     } else {
-      stopPublicRecording();
-      openStream('public');
+      syncPublicStream();
       loadPublicHistory(robot);
     }
   });
@@ -107,11 +107,13 @@ function bindEvents() {
     state.publicHistory = [];
     state.publicHistoryRobot = null;
     state.publicHistoryDrawKey = '';
+    state.publicRealtimeStartedAt = 0;
     const robot = selectedPublicRobot();
-    if (robot && publicHistoryIsRealtime()) startPublicRealtime(robot, false);
+    if (robot && publicHistoryIsRealtime()) startPublicRealtime(robot);
     else if (robot) loadPublicHistory(robot);
   });
   $('#public-download-button').addEventListener('click', downloadPublicRecording);
+  $('#public-record-button').addEventListener('click', togglePublicRecording);
   $$('[data-public-mode]').forEach((button) => button.addEventListener('click', () => setPublicHistoryMode(button.dataset.publicMode)));
   $('#back-to-fleet').addEventListener('click', (event) => { event.preventDefault(); showFleet(); });
   window.addEventListener('popstate', syncPublicRoute);
@@ -305,7 +307,8 @@ function closeStream(schedule = true) {
 
 function reconnectStream() {
   state.reconnectAttempt = 0;
-  openStream(state.view === 'settings' ? 'admin' : 'public', state.view === 'settings' ? null : state.publicStreamOptions);
+  if (state.view === 'settings') openStream('admin');
+  else openStream('public', publicStreamOptionsForCurrent());
 }
 
 function scheduleReconnect() {
@@ -471,6 +474,7 @@ function openPublicRobot(id) {
   state.publicHistory = [];
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
+  state.publicRealtimeStartedAt = 0;
   state.publicHistoryRequestID += 1;
   state.publicHistoryLoading = false;
   window.history.pushState({}, '', `/robot/${encodeURIComponent(id)}`);
@@ -485,6 +489,7 @@ function showFleet(replace = false) {
   state.publicHistory = [];
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
+  state.publicRealtimeStartedAt = 0;
   state.publicHistoryRequestID += 1;
   state.publicHistoryLoading = false;
   if (replace) window.history.replaceState({}, '', '/');
@@ -503,6 +508,7 @@ function syncPublicRoute() {
     state.publicHistory = [];
     state.publicHistoryRobot = null;
     state.publicHistoryDrawKey = '';
+    state.publicRealtimeStartedAt = 0;
     state.publicHistoryRequestID += 1;
     state.publicHistoryLoading = false;
   }
@@ -516,10 +522,10 @@ function renderPublicHistoryControls() {
     ? [['60', '最近 1 分钟']]
     : state.publicHistoryMode === 'single'
       ? [['60', '最近 1 分钟'], ['realtime', '实时']]
-    : [['realtime', '实时'], ['1', '1 小时'], ['6', '6 小时'], ['12', '12 小时'], ['24', '1 天'], ['168', '7 天'], ['720', '30 天']];
+    : [['1', '1 小时'], ['6', '6 小时'], ['24', '1 天'], ['168', '7 天']];
   if (range.dataset.scope !== rangeScope) {
     range.innerHTML = rangeOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
-    range.value = state.publicHistoryMode === 'host' ? 'realtime' : '60';
+    range.value = state.publicHistoryMode === 'host' ? '1' : '60';
     range.dataset.scope = rangeScope;
   }
   const latestMotorPoint = [...state.publicHistory].reverse().find((point) => point.motors?.length);
@@ -535,19 +541,28 @@ function renderPublicHistoryControls() {
   $('#public-history-range').classList.toggle('hidden', state.publicHistoryMode === 'motors');
   $('#public-history-fixed-range').classList.toggle('hidden', state.publicHistoryMode !== 'motors');
   $('#public-recording-indicator').classList.toggle('hidden', !publicRecorder?.active);
+  const recordButton = $('#public-record-button');
+  const selected = selectedPublicRobot();
+  recordButton.disabled = !selected;
+  recordButton.title = publicRecorder?.active ? '停止录制' : '开始录制';
+  recordButton.setAttribute('aria-label', recordButton.title);
+  recordButton.classList.toggle('recording', Boolean(publicRecorder?.active));
+  recordButton.innerHTML = publicRecorder?.active
+    ? '<i data-lucide="square"></i><span>停止录制</span>'
+    : '<i data-lucide="circle"></i><span>开始录制</span>';
   $('#public-download-button').disabled = !publicRecorder || (!publicRecorder.active && !publicRecorder.hasData);
   $$('[data-public-mode]').forEach((button) => button.classList.toggle('active', button.dataset.publicMode === state.publicHistoryMode));
+  renderIcons();
 }
 
 function setPublicHistoryMode(mode) {
-  if (mode !== 'single' || !publicHistoryIsRealtime()) stopPublicRecording();
   state.publicHistoryMode = mode;
   state.publicHistory = [];
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
   renderPublicHistoryControls();
   const robot = selectedPublicRobot();
-  if (!isPublicSingleRealtime()) openStream('public');
+  syncPublicStream();
   if (robot && publicHistoryIsRealtime()) {
     startPublicRealtime(robot);
     renderPublicHistoryControls();
@@ -556,9 +571,26 @@ function setPublicHistoryMode(mode) {
   else drawPublicHistory(state.publicHistory);
 }
 
-function publicHistoryRange() { return $('#public-history-range')?.value || '60'; }
-function publicHistoryIsRealtime() { return state.publicHistoryMode === 'host' ? publicHistoryRange() === 'realtime' : state.publicHistoryMode === 'single' && publicHistoryRange() === 'realtime'; }
+function publicHistoryRange() { return $('#public-history-range')?.value || '1'; }
+function publicHistoryIsRealtime() { return state.publicHistoryMode === 'single' && publicHistoryRange() === 'realtime'; }
 function isPublicSingleRealtime() { return state.publicHistoryMode === 'single' && publicHistoryIsRealtime(); }
+
+function publicStreamOptionsForCurrent() {
+  const robot = selectedPublicRobot();
+  if (!robot) return null;
+  const recording = publicRecorder?.active && publicRecorder.robotID === robot.id;
+  if (!recording && !isPublicSingleRealtime()) return null;
+  return { includeSamples: true, robotID: robot.id };
+}
+
+function syncPublicStream() {
+  if (state.view !== 'display') return;
+  const desired = publicStreamOptionsForCurrent();
+  const current = state.publicStreamOptions;
+  const same = (desired?.includeSamples || false) === (current?.includeSamples || false)
+    && (desired?.robotID || '') === (current?.robotID || '');
+  if (!same || !state.stream) openStream('public', desired);
+}
 
 async function loadPublicHistory(robot) {
   if (!robot || publicHistoryIsRealtime()) {
@@ -642,13 +674,10 @@ function primePublicRealtimeHistory(robot) {
 
 function startPublicRealtime(robot, reset = true) {
   if (!robot || state.publicHistoryMode !== 'single' || !publicHistoryIsRealtime()) return;
-  if (!publicRecorder?.active || publicRecorder.robotID !== robot.id) startPublicRecording(robot.id);
   if (reset && state.publicHistoryRobot !== robot.id) state.publicHistory = [];
+  if (reset && state.publicHistoryRobot !== robot.id) state.publicRealtimeStartedAt = Date.now();
   state.publicHistoryRobot = robot.id;
-  const options = { includeSamples: true, robotID: robot.id };
-  if (!state.publicStreamOptions || state.publicStreamOptions.robotID !== robot.id || !state.publicStreamOptions.includeSamples) {
-    openStream('public', options);
-  }
+  syncPublicStream();
   renderPublicHistoryControls();
 }
 
@@ -700,6 +729,18 @@ function startPublicRecording(robotID) {
     chunks: [],
     writePromise: Promise.resolve(),
   };
+  renderPublicHistoryControls();
+}
+
+function togglePublicRecording() {
+  const robot = selectedPublicRobot();
+  if (!robot) return;
+  if (publicRecorder?.active) {
+    stopPublicRecording();
+  } else {
+    startPublicRecording(robot.id);
+  }
+  syncPublicStream();
   renderPublicHistoryControls();
 }
 
@@ -990,7 +1031,7 @@ function drawPublicHistory(points) {
     return;
   }
   const specs = publicChartSpecs(points).map((spec) => ({ ...spec, values: finiteSeriesValues(points, spec) })).filter((spec) => spec.values.length > 0);
-  const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, points[0]?.at, points.at(-1)?.at, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width)]);
+  const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, points[0]?.at, points.at(-1)?.at, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width), publicHistoryIsRealtime() ? Math.floor(Date.now() / 1000) : 0]);
   if (drawKey === state.publicHistoryDrawKey && grid.childElementCount) return;
   const empty = $('#public-history-empty');
   empty.classList.toggle('hidden', specs.length > 0 || state.publicHistoryLoading);
@@ -1002,7 +1043,10 @@ function drawPublicHistory(points) {
   }
   grid.innerHTML = specs.map((spec, index) => {
     const latest = spec.values.at(-1)?.value;
-    return `<article class="chart-card"><header><div><span>${escapeHTML(spec.group)}</span><h3>${escapeHTML(spec.label)}</h3></div><strong>${escapeHTML(formatChartValue(latest, spec))}</strong></header><div class="chart-canvas"><canvas data-chart-index="${index}"></canvas></div><footer><span>${escapeHTML(publicHistoryIsRealtime() ? formatRelativeAxis((Date.parse(spec.values[0]?.at) - Date.now()) / 1000) : formatChartTime(spec.values[0]?.at))}</span><span>${escapeHTML(publicHistoryIsRealtime() ? '现在' : formatChartTime(spec.values.at(-1)?.at))}</span></footer></article>`;
+    const realtime = publicHistoryIsRealtime();
+    const start = realtime ? realtimeAxisStart(spec.values) : 0;
+    const end = realtime ? realtimeAxisEnd(spec.values) : 0;
+    return `<article class="chart-card"><header><div><span>${escapeHTML(spec.group)}</span><h3>${escapeHTML(spec.label)}</h3></div><strong>${escapeHTML(formatChartValue(latest, spec))}</strong></header><div class="chart-canvas"><canvas data-chart-index="${index}"></canvas></div><footer><span>${escapeHTML(realtime ? formatElapsedAxis(0) : formatChartTime(spec.values[0]?.at))}</span><span>${escapeHTML(realtime ? formatElapsedAxis((end - start) / 1000) : formatChartTime(spec.values.at(-1)?.at))}</span></footer></article>`;
   }).join('');
   $$('#public-chart-grid canvas').forEach((canvas) => drawSingleMetricChart(canvas, specs[Number(canvas.dataset.chartIndex)]));
   state.publicHistoryDrawKey = drawKey;
@@ -1095,8 +1139,9 @@ function drawSingleMetricChart(canvas, spec) {
     context.fillText(formatAxisValue(value, spec.unit), 3, y + 4);
   }
   const realtime = Boolean(spec.realtime);
-  const latestAt = realtime ? Date.now() : Date.parse(entries.at(-1)?.at);
-  const windowStart = latestAt - PUBLIC_REALTIME_WINDOW_SECONDS * 1000;
+  const windowStart = realtime ? realtimeAxisStart(entries) : 0;
+  const windowEnd = realtime ? realtimeAxisEnd(entries) : Date.parse(entries.at(-1)?.at);
+  const windowDuration = Math.max(1, windowEnd - windowStart);
   if (realtime) {
     context.strokeStyle = '#e4e7eb';
     context.fillStyle = '#7a838d';
@@ -1104,7 +1149,7 @@ function drawSingleMetricChart(canvas, spec) {
     for (let index = 0; index <= 5; index += 1) {
       const x = padding.left + chartWidth * (index / 5);
       context.beginPath(); context.moveTo(x, padding.top); context.lineTo(x, height - padding.bottom); context.stroke();
-      context.fillText(formatRelativeAxis((windowStart + (PUBLIC_REALTIME_WINDOW_SECONDS * index / 5) * 1000 - latestAt) / 1000), x, height - 8);
+      context.fillText(formatElapsedAxis((windowEnd - windowStart) * index / 5 / 1000), x, height - 8);
     }
     context.textAlign = 'start';
   }
@@ -1117,7 +1162,7 @@ function drawSingleMetricChart(canvas, spec) {
   values.forEach((value, index) => {
     if (!Number.isFinite(value)) { started = false; return; }
     const timestamp = Date.parse(entries[index]?.at);
-    const ratioX = realtime && Number.isFinite(timestamp) ? Math.max(0, Math.min(1, (timestamp - windowStart) / (PUBLIC_REALTIME_WINDOW_SECONDS * 1000))) : (entries.length === 1 ? .5 : index / (entries.length - 1));
+    const ratioX = realtime && Number.isFinite(timestamp) ? Math.max(0, Math.min(1, (timestamp - windowStart) / windowDuration)) : (entries.length === 1 ? .5 : index / (entries.length - 1));
     const x = padding.left + chartWidth * ratioX;
     const y = padding.top + chartHeight * (1 - (value - min) / (max - min));
     if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
@@ -1149,6 +1194,29 @@ function formatRelativeAxis(seconds) {
   const minutes = Math.floor(total / 60);
   const remainder = total % 60;
   return remainder ? `-${minutes}m${String(remainder).padStart(2, '0')}s` : `-${minutes}m`;
+}
+
+function formatElapsedAxis(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0s';
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const remainder = total % 60;
+  if (minutes < 60) return remainder ? `${minutes}m${String(remainder).padStart(2, '0')}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h${minutes % 60 ? `${String(minutes % 60).padStart(2, '0')}m` : ''}`;
+}
+
+function realtimeAxisStart(entries) {
+  const first = Date.parse(entries.find((entry) => Number.isFinite(Date.parse(entry.at)))?.at);
+  return Number.isFinite(state.publicRealtimeStartedAt) && state.publicRealtimeStartedAt > 0
+    ? state.publicRealtimeStartedAt
+    : (Number.isFinite(first) ? first : Date.now());
+}
+
+function realtimeAxisEnd(entries) {
+  const last = Date.parse([...entries].reverse().find((entry) => Number.isFinite(Date.parse(entry.at)))?.at);
+  return Math.max(Date.now(), Number.isFinite(last) ? last : 0, realtimeAxisStart(entries) + 1000);
 }
 
 function formatChartTime(value) {
