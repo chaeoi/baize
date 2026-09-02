@@ -44,6 +44,8 @@ h1, h2, h3 { text-wrap: balance; }
 .button.primary:hover { background: #135f94; }
 .button.subtle { color: var(--ink); background: #fff; border-color: #cbd5d8; }
 .button.subtle:hover, .icon-button:hover { background: #f2f6f6; }
+.button.subtle.recording { color: #a33c45; border-color: #e6bfc3; background: #fff7f7; }
+.button.subtle.recording:hover { background: #fcecee; }
 .button.danger { color: var(--red); background: #fff; border-color: #ecc9ce; }
 .button.full { width: 100%; }
 
