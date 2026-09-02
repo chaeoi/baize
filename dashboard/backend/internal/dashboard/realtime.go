@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,10 +111,19 @@ type adminStreamEvent struct {
 }
 
 type streamClient struct {
-	conn     *websocket.Conn
-	send     chan []byte
-	done     chan struct{}
-	stopOnce sync.Once
+	conn          *websocket.Conn
+	send          chan []byte
+	done          chan struct{}
+	stopOnce      sync.Once
+	publicOptions *publicStreamOptions
+}
+
+// publicStreamOptions lets a detail page receive high-rate samples only for
+// the robot and motors it is actually displaying or recording.
+type publicStreamOptions struct {
+	robotID        string
+	includeSamples bool
+	motorIDs       map[string]struct{}
 }
 
 func (client *streamClient) stop() {
@@ -150,11 +160,19 @@ func (hub *streamHub) remove(client *streamClient) {
 }
 
 func (hub *streamHub) broadcast(message []byte) {
+	hub.broadcastWith(func(*streamClient) []byte { return message })
+}
+
+func (hub *streamHub) broadcastWith(message func(*streamClient) []byte) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
 	for client := range hub.clients {
+		payload := message(client)
+		if len(payload) == 0 {
+			continue
+		}
 		select {
-		case client.send <- message:
+		case client.send <- payload:
 		default:
 			// A slow browser must not retain every telemetry update or block
 			// other viewers. It will reconnect and receive a fresh snapshot.
@@ -251,11 +269,37 @@ func (s *Server) publicRobotSnapshot() []PublicRobot {
 }
 
 func (s *Server) publicRobotEvent(record RobotRecord) []byte {
-	message, _ := json.Marshal(robotStreamEvent{Type: "robot", ServerTime: time.Now().UTC(), Robot: func() *PublicRobot {
-		robot := s.publicRobotWithSamples(record, true)
-		return &robot
-	}()})
+	return s.publicRobotEventForOptions(record, nil)
+}
+
+func (s *Server) publicRobotEventForOptions(record RobotRecord, options *publicStreamOptions) []byte {
+	includeSamples := options == nil || (options.includeSamples && options.robotID == publicRobotID(s.config.JWTSecret, record.UUID))
+	robot := s.publicRobotWithSamples(record, includeSamples)
+	if includeSamples && options != nil && len(options.motorIDs) > 0 {
+		filterPublicMotorSamples(&robot, options.motorIDs)
+	}
+	message, _ := json.Marshal(robotStreamEvent{Type: "robot", ServerTime: time.Now().UTC(), Robot: &robot})
 	return message
+}
+
+func filterPublicMotorSamples(robot *PublicRobot, motorIDs map[string]struct{}) {
+	if len(robot.MotorSamples) == 0 {
+		return
+	}
+	filtered := robot.MotorSamples[:0]
+	for _, sample := range robot.MotorSamples {
+		motors := sample.Motors[:0]
+		for _, motor := range sample.Motors {
+			if _, ok := motorIDs[motor.ID]; ok {
+				motors = append(motors, motor)
+			}
+		}
+		if len(motors) > 0 {
+			sample.Motors = motors
+			filtered = append(filtered, sample)
+		}
+	}
+	robot.MotorSamples = filtered
 }
 
 func (s *Server) publicSnapshotEvent() []byte {
@@ -303,6 +347,15 @@ func (s *Server) serveRobotStream(writer http.ResponseWriter, request *http.Requ
 		snapshot = s.adminSnapshotEvent()
 	}
 	client := &streamClient{conn: connection, send: make(chan []byte, streamQueueSize), done: make(chan struct{})}
+	if !admin {
+		options, ok := parsePublicStreamOptions(request)
+		if !ok {
+			_ = connection.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "invalid stream options"), time.Now().Add(streamWriteWait))
+			client.stop()
+			return
+		}
+		client.publicOptions = &options
+	}
 	client.send <- snapshot
 	if !hub.add(client) {
 		_ = connection.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many live viewers"), time.Now().Add(streamWriteWait))
@@ -345,4 +398,39 @@ func (s *Server) serveRobotStream(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 	}
+}
+
+func parsePublicStreamOptions(request *http.Request) (publicStreamOptions, bool) {
+	options := publicStreamOptions{}
+	query := request.URL.Query()
+	if query.Get("include_samples") != "1" {
+		return options, true
+	}
+	options.includeSamples = true
+	options.robotID = query.Get("robot_id")
+	if len(options.robotID) != 20 || !isHexString(options.robotID) {
+		return publicStreamOptions{}, false
+	}
+	motorIDs := strings.TrimSpace(query.Get("motor_ids"))
+	if motorIDs == "" || motorIDs == "all" {
+		return options, true
+	}
+	options.motorIDs = make(map[string]struct{})
+	for _, motorID := range strings.Split(motorIDs, ",") {
+		motorID = strings.TrimSpace(motorID)
+		if !motorIDPattern.MatchString(motorID) || len(options.motorIDs) >= 64 {
+			return publicStreamOptions{}, false
+		}
+		options.motorIDs[motorID] = struct{}{}
+	}
+	return options, true
+}
+
+func isHexString(value string) bool {
+	for _, character := range value {
+		if !(character >= '0' && character <= '9') && !(character >= 'a' && character <= 'f') && !(character >= 'A' && character <= 'F') {
+			return false
+		}
+	}
+	return true
 }

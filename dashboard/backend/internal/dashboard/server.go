@@ -37,6 +37,8 @@ const (
 	maxCompressedTelemetryBytes = 16 << 20
 	maxReleaseBytes             = 128 << 20
 	fastMotorHistoryLimit       = 32_000
+	publicMotorHistoryLimit     = 1_200
+	publicSingleMotorLimit      = 6_000
 )
 
 var (
@@ -44,6 +46,7 @@ var (
 	// All release channels use the public projects' UTC YYYYMMDD version scheme.
 	versionPattern  = regexp.MustCompile(`^[0-9]{8}$`)
 	platformPattern = regexp.MustCompile(`^[a-z0-9_-]{2,20}$`)
+	motorIDPattern  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 )
 
 type ServerConfig struct {
@@ -365,7 +368,15 @@ func (s *Server) publicRobotAction(writer http.ResponseWriter, request *http.Req
 	var points []HistoryPoint
 	var err error
 	if scope == "motors" {
-		points, err = s.store.FastMotorHistory(uuid, from, to, fastMotorHistoryLimit)
+		limit, motorID, valid := fastMotorHistoryOptions(writer, request, publicMotorHistoryLimit)
+		if !valid {
+			return
+		}
+		if motorID != "" {
+			points, err = s.store.FastMotorHistoryFiltered(uuid, from, to, limit, motorID)
+		} else {
+			points, err = s.store.FastMotorHistory(uuid, from, to, limit)
+		}
 	} else {
 		points, err = s.store.History(uuid, from, to, 5000)
 	}
@@ -520,7 +531,15 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 		var points []HistoryPoint
 		var err error
 		if scope == "motors" {
-			points, err = s.store.FastMotorHistory(uuid, from, to, fastMotorHistoryLimit)
+			limit, motorID, valid := fastMotorHistoryOptions(writer, request, fastMotorHistoryLimit)
+			if !valid {
+				return
+			}
+			if motorID != "" {
+				points, err = s.store.FastMotorHistoryFiltered(uuid, from, to, limit, motorID)
+			} else {
+				points, err = s.store.FastMotorHistory(uuid, from, to, limit)
+			}
 		} else {
 			points, err = s.store.History(uuid, from, to, 5000)
 		}
@@ -564,6 +583,24 @@ func historyDuration(writer http.ResponseWriter, request *http.Request, fast boo
 	return time.Duration(seconds) * time.Second, true
 }
 
+func fastMotorHistoryOptions(writer http.ResponseWriter, request *http.Request, fallback int) (int, string, bool) {
+	limit := fallback
+	if value := request.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > fastMotorHistoryLimit {
+			writeError(writer, http.StatusBadRequest, "fast motor history limit must be between 1 and 32000")
+			return 0, "", false
+		}
+		limit = parsed
+	}
+	motorID := request.URL.Query().Get("motor_id")
+	if motorID != "" && !motorIDPattern.MatchString(motorID) {
+		writeError(writer, http.StatusBadRequest, "invalid motor id")
+		return 0, "", false
+	}
+	return limit, motorID, true
+}
+
 func allowPublicAPI(writer http.ResponseWriter) {
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -573,7 +610,9 @@ func allowPublicAPI(writer http.ResponseWriter) {
 
 func (s *Server) broadcastRobot(uuid string) {
 	if robot, ok := s.store.Robot(uuid); ok {
-		s.publicStream.broadcast(s.publicRobotEvent(robot))
+		s.publicStream.broadcastWith(func(client *streamClient) []byte {
+			return s.publicRobotEventForOptions(robot, client.publicOptions)
+		})
 		s.adminStream.broadcast(s.adminRobotEvent(robot))
 	}
 }

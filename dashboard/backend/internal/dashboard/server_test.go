@@ -33,6 +33,25 @@ func TestFrontendDisablesCachingForAssetsAndRoutes(t *testing.T) {
 	}
 }
 
+func TestParsePublicStreamOptions(t *testing.T) {
+	validID := "0123456789abcdef0123"
+	options, ok := parsePublicStreamOptions(httptest.NewRequest(http.MethodGet, "/api/v1/ws/robots", nil))
+	if !ok || options.includeSamples {
+		t.Fatalf("default public stream options = %+v, ok=%v", options, ok)
+	}
+	options, ok = parsePublicStreamOptions(httptest.NewRequest(http.MethodGet, "/api/v1/ws/robots?include_samples=1&robot_id="+validID, nil))
+	if !ok || !options.includeSamples || options.robotID != validID || len(options.motorIDs) != 0 {
+		t.Fatalf("sample stream options = %+v, ok=%v", options, ok)
+	}
+	options, ok = parsePublicStreamOptions(httptest.NewRequest(http.MethodGet, "/api/v1/ws/robots?include_samples=1&robot_id="+validID+"&motor_ids=left_ankle_virtual_1,right_ankle_virtual_1", nil))
+	if !ok || len(options.motorIDs) != 2 {
+		t.Fatalf("filtered sample stream options = %+v, ok=%v", options, ok)
+	}
+	if _, ok := parsePublicStreamOptions(httptest.NewRequest(http.MethodGet, "/api/v1/ws/robots?include_samples=1&robot_id=not-an-id", nil)); ok {
+		t.Fatal("invalid public robot id accepted")
+	}
+}
+
 func TestSessionTokenUsesJWTSecret(t *testing.T) {
 	server := &Server{config: ServerConfig{JWTSecret: "jwt-secret-long-enough-for-tests-123456"}}
 	expires := time.Now().Add(time.Hour)
