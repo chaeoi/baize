@@ -1100,7 +1100,7 @@ function drawPublicHistory(points) {
   if (!grid || !selectedPublicRobot()) return;
   grid.classList.toggle('single-mode', state.publicHistoryMode === 'single');
   const specs = publicChartSpecs(points).map((spec) => ({ ...spec, values: finiteSeriesValues(points, spec) })).filter((spec) => spec.values.length > 0);
-  const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, points[0]?.at, points.at(-1)?.at, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width), publicHistoryIsRealtime() ? Math.floor(Date.now() / 1000) : 0]);
+  const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, points[0]?.at, points.at(-1)?.at, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width)]);
   if (drawKey === state.publicHistoryDrawKey && grid.childElementCount) return;
   const empty = $('#public-history-empty');
   empty.classList.toggle('hidden', specs.length > 0 || state.publicHistoryLoading);
@@ -1211,24 +1211,14 @@ function drawSingleMetricChart(canvas, spec) {
   context.lineCap = 'round';
   context.beginPath();
   let started = false;
-  let lastFiniteIndex = -1;
   values.forEach((value, index) => {
     if (!Number.isFinite(value)) { started = false; return; }
-    lastFiniteIndex = index;
     const timestamp = Date.parse(entries[index]?.at);
     const ratioX = realtime && Number.isFinite(timestamp) ? Math.max(0, Math.min(1, (timestamp - windowStart) / windowDuration)) : (entries.length === 1 ? .5 : index / (entries.length - 1));
     const x = padding.left + chartWidth * ratioX;
     const y = padding.top + chartHeight * (1 - (value - min) / (max - min));
     if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
   });
-  if (realtime && lastFiniteIndex >= 0) {
-    const lastValue = values[lastFiniteIndex];
-    const lastTimestamp = Date.parse(entries[lastFiniteIndex]?.at);
-    const lastRatio = Number.isFinite(lastTimestamp) ? Math.max(0, Math.min(1, (lastTimestamp - windowStart) / windowDuration)) : 1;
-    const lastX = padding.left + chartWidth * lastRatio;
-    const lastY = padding.top + chartHeight * (1 - (lastValue - min) / (max - min));
-    if (lastX < width - padding.right) context.lineTo(width - padding.right, lastY);
-  }
   context.stroke();
 }
 
@@ -1270,13 +1260,18 @@ function formatElapsedAxis(seconds) {
 }
 
 function realtimeAxisStart(entries) {
-  const first = Date.parse(entries.find((entry) => Number.isFinite(Date.parse(entry.at)))?.at);
-  return Number.isFinite(first) ? first : (Number.isFinite(state.publicRealtimeStartedAt) && state.publicRealtimeStartedAt > 0 ? state.publicRealtimeStartedAt : Date.now());
+  const valid = entries.filter((entry) => Number.isFinite(Date.parse(entry.at)));
+  const first = Date.parse(valid[0]?.at);
+  const last = Date.parse(valid.at(-1)?.at);
+  if (!Number.isFinite(first)) return Number.isFinite(state.publicRealtimeStartedAt) && state.publicRealtimeStartedAt > 0 ? state.publicRealtimeStartedAt : Date.now();
+  // With one sample, give the point a short runway so it remains visible at the right edge.
+  return first === last ? first - 1000 : first;
 }
 
 function realtimeAxisEnd(entries) {
   const last = Date.parse([...entries].reverse().find((entry) => Number.isFinite(Date.parse(entry.at)))?.at);
-  return Math.max(Date.now(), Number.isFinite(last) ? last : 0, realtimeAxisStart(entries) + 1000);
+  const start = realtimeAxisStart(entries);
+  return Number.isFinite(last) ? Math.max(last, start + 1000) : start + 1000;
 }
 
 function formatChartTime(value) {
