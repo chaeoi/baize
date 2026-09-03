@@ -807,14 +807,87 @@ async function downloadPublicRecording() {
   }
   chunks.sort((left, right) => left.key.localeCompare(right.key, undefined, { numeric: true }));
   const events = chunks.flatMap((chunk) => chunk.events || []);
-  if (!events.length) { toast('暂无可下载的录制数据', true); return; }
-  const body = `{"format":"baize-telemetry-v1","robot_id":${JSON.stringify(publicRecorder.robotID)},"started_at":${JSON.stringify(publicRecorder.startedAt)},"downloaded_at":${JSON.stringify(new Date().toISOString())},"events":[${events.join(',')}]}`;
+  const rows = publicRecordingRows(events, publicRecorder.robotID);
+  if (!rows.length) { toast('暂无可下载的录制数据', true); return; }
+  const headers = [
+    '序号', '采样时间（UTC）', '机器人编码', '机器人ID', '记录类型', '电机ID', '电机名称',
+    '电机位置（rad）', '电机速度（rad/s）', '电机转矩（N·m）', 'CPU使用率（%）', '内存使用率（%）',
+    '磁盘使用率（%）', '系统负载（1m）', '最高温度（°C）', 'GPU使用率（%）', 'GPU温度（°C）',
+    '电池电量（%）', '电池电压（V）', '电池电流（A）', '电池功率（W）'
+  ];
+  const body = [headers, ...rows.map((row, index) => [
+    index + 1, row.at, row.code, row.robotID, row.kind, row.motorID, row.motorLabel,
+    csvNumber(row.positionRad), csvNumber(row.velocityRadPerSec), csvNumber(row.torqueNm),
+    csvNumber(row.cpuPercent), csvNumber(row.memoryPercent), csvNumber(row.diskPercent), csvNumber(row.load1),
+    csvNumber(row.temperatureMax), csvNumber(row.gpuUtilizationPercent), csvNumber(row.gpuTemperatureCelsius),
+    csvNumber(row.batterySocPercent), csvNumber(row.batteryVoltage), csvNumber(row.batteryCurrent), csvNumber(row.batteryPowerWatts)
+  ])]
+    .map((columns) => columns.map(csvCell).join(','))
+    .join('\r\n');
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
-  link.download = `baize-${publicRecorder.robotID}-${publicRecorder.startedAt.replace(/[:.]/g, '-')}.json`;
+  link.href = URL.createObjectURL(new Blob([`\uFEFF${body}\r\n`], { type: 'text/csv;charset=utf-8' }));
+  link.download = `baize-${publicRecorder.robotID}-${publicRecorder.startedAt.replace(/[:.]/g, '-')}.csv`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  toast(`已下载 ${events.length} 条完整遥测事件`);
+  toast(`已下载 ${rows.length} 条有序遥测记录`);
+}
+
+function publicRecordingRows(events, robotID) {
+  const rows = [];
+  const seen = new Set();
+  for (const rawEvent of events) {
+    let event;
+    try { event = JSON.parse(rawEvent); } catch { continue; }
+    const robot = event?.robot;
+    if (!robot || robot.id !== robotID) continue;
+    const summary = robot.summary || {};
+    const hostAt = robot.collected_at || robot.last_seen || event.server_time;
+    if (hostAt && !seen.has(`host:${hostAt}`)) {
+      seen.add(`host:${hostAt}`);
+      rows.push({
+        at: hostAt, code: robot.code || '', robotID, kind: '主机摘要', motorID: '', motorLabel: '',
+        cpuPercent: summary.cpu_percent, memoryPercent: summary.memory_percent, diskPercent: summary.disk_percent,
+        load1: summary.load_1, temperatureMax: summary.temperature_max,
+        gpuUtilizationPercent: summary.gpu?.utilization_percent, gpuTemperatureCelsius: summary.gpu?.temperature_celsius,
+        batterySocPercent: summary.battery?.soc_percent, batteryVoltage: summary.battery?.voltage,
+        batteryCurrent: summary.battery?.current, batteryPowerWatts: summary.battery?.power_watts
+      });
+    }
+    for (const sample of robot.motor_samples || []) {
+      if (!sample?.at) continue;
+      for (const motor of sample.motors || []) {
+        if (!motor?.id) continue;
+        const key = `motor:${sample.at}:${motor.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({
+          at: sample.at, code: robot.code || '', robotID, kind: '电机采样', motorID: motor.id,
+          motorLabel: motor.label || robot.motor_labels?.[motor.id] || motor.id,
+          positionRad: motor.position_rad, velocityRadPerSec: motor.velocity_rad_per_sec, torqueNm: motor.torque_nm
+        });
+      }
+    }
+  }
+  rows.sort((left, right) => {
+    const leftAt = Date.parse(left.at);
+    const rightAt = Date.parse(right.at);
+    if (Number.isFinite(leftAt) && Number.isFinite(rightAt) && leftAt !== rightAt) return leftAt - rightAt;
+    if (Number.isFinite(leftAt) !== Number.isFinite(rightAt)) return Number.isFinite(leftAt) ? -1 : 1;
+    if (left.kind !== right.kind) return left.kind === '主机摘要' ? -1 : 1;
+    return String(left.motorID).localeCompare(String(right.motorID), undefined, { numeric: true });
+  });
+  return rows;
+}
+
+function csvNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(number) : '';
+}
+
+function csvCell(value) {
+  if (value === null || value === undefined) return '';
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 function renderSettings() {
@@ -1138,14 +1211,24 @@ function drawSingleMetricChart(canvas, spec) {
   context.lineCap = 'round';
   context.beginPath();
   let started = false;
+  let lastFiniteIndex = -1;
   values.forEach((value, index) => {
     if (!Number.isFinite(value)) { started = false; return; }
+    lastFiniteIndex = index;
     const timestamp = Date.parse(entries[index]?.at);
     const ratioX = realtime && Number.isFinite(timestamp) ? Math.max(0, Math.min(1, (timestamp - windowStart) / windowDuration)) : (entries.length === 1 ? .5 : index / (entries.length - 1));
     const x = padding.left + chartWidth * ratioX;
     const y = padding.top + chartHeight * (1 - (value - min) / (max - min));
     if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
   });
+  if (realtime && lastFiniteIndex >= 0) {
+    const lastValue = values[lastFiniteIndex];
+    const lastTimestamp = Date.parse(entries[lastFiniteIndex]?.at);
+    const lastRatio = Number.isFinite(lastTimestamp) ? Math.max(0, Math.min(1, (lastTimestamp - windowStart) / windowDuration)) : 1;
+    const lastX = padding.left + chartWidth * lastRatio;
+    const lastY = padding.top + chartHeight * (1 - (lastValue - min) / (max - min));
+    if (lastX < width - padding.right) context.lineTo(width - padding.right, lastY);
+  }
   context.stroke();
 }
 
@@ -1188,9 +1271,7 @@ function formatElapsedAxis(seconds) {
 
 function realtimeAxisStart(entries) {
   const first = Date.parse(entries.find((entry) => Number.isFinite(Date.parse(entry.at)))?.at);
-  return Number.isFinite(state.publicRealtimeStartedAt) && state.publicRealtimeStartedAt > 0
-    ? state.publicRealtimeStartedAt
-    : (Number.isFinite(first) ? first : Date.now());
+  return Number.isFinite(first) ? first : (Number.isFinite(state.publicRealtimeStartedAt) && state.publicRealtimeStartedAt > 0 ? state.publicRealtimeStartedAt : Date.now());
 }
 
 function realtimeAxisEnd(entries) {
