@@ -29,6 +29,7 @@ const state = {
 
 const PUBLIC_REALTIME_WINDOW_SECONDS = 30 * 60;
 const PUBLIC_ALL_MOTOR_LIMIT = 1_200;
+const PUBLIC_ALL_MOTOR_REALTIME_SECONDS = 60;
 const PUBLIC_SINGLE_MOTOR_LIMIT = 6_000;
 const PUBLIC_SINGLE_CHART_LIMIT = 18_000;
 let publicRecorder = null;
@@ -629,13 +630,30 @@ async function loadPublicHistory(robot) {
   }
 }
 
-function motorSamplesToPoints(samples, labels = {}) {
-  return (samples || []).map((sample) => ({
+function motorSamplesToPoints(samples, labels = {}, stride = 1) {
+  const source = samples || [];
+  const step = Math.max(1, Math.floor(Number(stride) || 1));
+  return source.filter((sample, index) => index % step === 0 || index === source.length - 1).map((sample) => ({
     at: sample.at,
     motor_count: (sample.motors || []).length,
     motor_topic_online: true,
-    motors: (sample.motors || []).map((motor) => ({ ...motor, label: motor.id })),
+    motors: (sample.motors || []).map((motor) => ({ ...motor, label: labels[motor.id] || motor.label || motor.id })),
   }));
+}
+
+function publicAllMotorRealtimeStride(robot) {
+  const declaredRate = Number(robot?.motor_sample_rate_hz);
+  const samples = robot?.motor_samples || [];
+  let sampleRate = declaredRate;
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    const first = Date.parse(samples[0]?.at);
+    const last = Date.parse(samples.at(-1)?.at);
+    const span = last - first;
+    if (samples.length > 1 && Number.isFinite(span) && span > 0) sampleRate = (samples.length - 1) * 1000 / span;
+  }
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) return 1;
+  const targetRate = PUBLIC_ALL_MOTOR_LIMIT / PUBLIC_ALL_MOTOR_REALTIME_SECONDS;
+  return Math.max(1, Math.ceil(sampleRate / targetRate));
 }
 
 function mergePublicMotorPoints(fresh, existing = []) {
@@ -646,7 +664,7 @@ function mergePublicMotorPoints(fresh, existing = []) {
   });
   const points = [...byAt.values()].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
   if (!points.length) return [];
-  const seconds = isPublicSingleRealtime() ? PUBLIC_REALTIME_WINDOW_SECONDS : Number(publicHistoryRange()) || 60;
+  const seconds = isPublicSingleRealtime() ? PUBLIC_REALTIME_WINDOW_SECONDS : Number(publicHistoryRange()) || PUBLIC_ALL_MOTOR_REALTIME_SECONDS;
   const cutoff = Date.parse(points.at(-1).at) - seconds * 1000;
   const visible = points.filter((point) => Date.parse(point.at) >= cutoff);
   const maxPoints = isPublicSingleRealtime() ? PUBLIC_SINGLE_CHART_LIMIT : (state.publicHistoryMode === 'single' ? PUBLIC_SINGLE_MOTOR_LIMIT : PUBLIC_ALL_MOTOR_LIMIT);
@@ -702,7 +720,8 @@ function appendPublicHostSample(robot) {
 
 function appendPublicMotorSamples(robot) {
   if (state.publicHistoryMode === 'host' || !robot?.motor_samples?.length) return;
-  const points = motorSamplesToPoints(robot.motor_samples, robot.motor_labels);
+  const stride = state.publicHistoryMode === 'motors' && publicHistoryIsRealtime() ? publicAllMotorRealtimeStride(robot) : 1;
+  const points = motorSamplesToPoints(robot.motor_samples, robot.motor_labels, stride);
   state.publicHistory = mergePublicMotorPoints(points, state.publicHistoryRobot === robot.id ? state.publicHistory : []);
   state.publicHistoryRobot = robot.id;
   state.publicHistoryDrawKey = '';
