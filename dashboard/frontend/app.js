@@ -512,7 +512,7 @@ function renderPublicHistoryControls() {
   const range = $('#public-history-range');
   const rangeScope = state.publicHistoryMode === 'motors' ? 'all-motors' : state.publicHistoryMode === 'single' ? 'single-motor' : 'host';
   const rangeOptions = state.publicHistoryMode === 'motors'
-    ? [['60', '最近 1 分钟']]
+    ? [['60', '最近 1 分钟'], ['realtime', '实时']]
     : state.publicHistoryMode === 'single'
       ? [['60', '最近 1 分钟'], ['realtime', '实时']]
     : [['1', '1 小时'], ['6', '6 小时'], ['24', '1 天'], ['168', '7 天']];
@@ -531,8 +531,8 @@ function renderPublicHistoryControls() {
   motorSelect.value = state.publicHistoryMotor;
   motorSelect.classList.toggle('hidden', state.publicHistoryMode !== 'single' || !motors.size);
   $('#public-metric-select').classList.toggle('hidden', state.publicHistoryMode !== 'motors' || !motors.size);
-  $('#public-history-range').classList.toggle('hidden', state.publicHistoryMode === 'motors');
-  $('#public-history-fixed-range').classList.toggle('hidden', state.publicHistoryMode !== 'motors');
+  $('#public-history-range').classList.remove('hidden');
+  $('#public-history-fixed-range').classList.add('hidden');
   $('#public-recording-indicator').classList.toggle('hidden', !publicRecorder?.active);
   const recordButton = $('#public-record-button');
   const selected = selectedPublicRobot();
@@ -565,14 +565,14 @@ function setPublicHistoryMode(mode) {
 }
 
 function publicHistoryRange() { return $('#public-history-range')?.value || '1'; }
-function publicHistoryIsRealtime() { return state.publicHistoryMode === 'single' && publicHistoryRange() === 'realtime'; }
+function publicHistoryIsRealtime() { return (state.publicHistoryMode === 'single' || state.publicHistoryMode === 'motors') && publicHistoryRange() === 'realtime'; }
 function isPublicSingleRealtime() { return state.publicHistoryMode === 'single' && publicHistoryIsRealtime(); }
 
 function publicStreamOptionsForCurrent() {
   const robot = selectedPublicRobot();
   if (!robot) return null;
   const recording = publicRecorder?.active && publicRecorder.robotID === robot.id;
-  if (!recording && !isPublicSingleRealtime()) return null;
+  if (!recording && !publicHistoryIsRealtime()) return null;
   return { includeSamples: true, robotID: robot.id };
 }
 
@@ -666,7 +666,7 @@ function primePublicRealtimeHistory(robot) {
 }
 
 function startPublicRealtime(robot, reset = true) {
-  if (!robot || state.publicHistoryMode !== 'single' || !publicHistoryIsRealtime()) return;
+  if (!robot || !publicHistoryIsRealtime()) return;
   if (reset && state.publicHistoryRobot !== robot.id) state.publicHistory = [];
   if (reset && state.publicHistoryRobot !== robot.id) state.publicRealtimeStartedAt = Date.now();
   state.publicHistoryRobot = robot.id;
@@ -1139,7 +1139,7 @@ function publicChartSpecs(points) {
   };
   if (state.publicHistoryMode === 'motors') {
     const [label, unit, color] = metric[state.publicHistoryMetric];
-    return motors.map(({ id, label: motorLabel, index }) => ({ key: `motor:${id}:${state.publicHistoryMetric}`, group: motorLabel, label, unit, color, value: (point) => motorValue(point, id, index, state.publicHistoryMetric) }));
+    return motors.map(({ id, label: motorLabel, index }) => ({ key: `motor:${id}:${state.publicHistoryMetric}`, group: motorLabel, label, unit, color, realtime: publicHistoryIsRealtime(), value: (point) => motorValue(point, id, index, state.publicHistoryMetric) }));
   }
   const selected = motors.find(({ id }) => id === state.publicHistoryMotor);
   if (!selected) return [];
