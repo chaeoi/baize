@@ -340,9 +340,7 @@ func (db *telemetryTSDB) FastMotorHistory(uuid string, from, to time.Time, limit
 		timestamps = append(timestamps, timestamp)
 	}
 	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
-	if limit > 0 && len(timestamps) > limit {
-		timestamps = timestamps[len(timestamps)-limit:]
-	}
+	timestamps = selectHistoryTimestamps(timestamps, limit)
 	result := make([]HistoryPoint, 0, len(timestamps))
 	for _, timestamp := range timestamps {
 		motors := points[timestamp]
@@ -433,23 +431,30 @@ func orderedHistoryPoints(points map[int64]*HistoryPoint, limit int) []HistoryPo
 		timestamps = append(timestamps, timestamp)
 	}
 	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i] < timestamps[j] })
-	if limit > 0 && len(timestamps) > limit {
-		if limit == 1 {
-			timestamps = timestamps[len(timestamps)-1:]
-		} else {
-			downsampled := make([]int64, limit)
-			last := len(timestamps) - 1
-			for index := range downsampled {
-				downsampled[index] = timestamps[index*last/(limit-1)]
-			}
-			timestamps = downsampled
-		}
-	}
+	timestamps = selectHistoryTimestamps(timestamps, limit)
 	result := make([]HistoryPoint, 0, len(timestamps))
 	for _, timestamp := range timestamps {
 		result = append(result, *points[timestamp])
 	}
 	return result
+}
+
+// selectHistoryTimestamps keeps the requested time range represented while
+// bounding the number of points returned to the browser. The endpoints are
+// always retained so a one-minute query does not collapse to only its tail.
+func selectHistoryTimestamps(timestamps []int64, limit int) []int64 {
+	if limit <= 0 || len(timestamps) <= limit {
+		return timestamps
+	}
+	if limit == 1 {
+		return timestamps[len(timestamps)-1:]
+	}
+	downsampled := make([]int64, limit)
+	last := len(timestamps) - 1
+	for index := range downsampled {
+		downsampled[index] = timestamps[index*last/(limit-1)]
+	}
+	return downsampled
 }
 
 func boolFloat(value bool) float64 {

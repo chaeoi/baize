@@ -142,6 +142,19 @@ func TestStoreRoundTripsComplete500HzMotorBatch(t *testing.T) {
 	if len(points[999].Motors) != 32 || points[999].Motors[31].TorqueNm != 1030.25 {
 		t.Fatalf("500Hz batch last point was not preserved: %+v", points[999])
 	}
+	limited, err := store.FastMotorHistory(telemetry.Robot.UUID, startedAt.Add(-time.Millisecond), time.Now().UTC().Add(time.Second), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 10 {
+		t.Fatalf("downsampled point count=%d, want 10", len(limited))
+	}
+	if limited[0].At.UnixMilli() != samples[0].At.UnixMilli() || limited[len(limited)-1].At.UnixMilli() != samples[len(samples)-1].At.UnixMilli() {
+		t.Fatalf("downsampled range=%v..%v, want %v..%v", limited[0].At, limited[len(limited)-1].At, samples[0].At, samples[len(samples)-1].At)
+	}
+	if limited[1].At.UnixMilli() != samples[111].At.UnixMilli() {
+		t.Fatalf("downsampled timestamps did not span the range: second=%v, want %v", limited[1].At, samples[111].At)
+	}
 }
 
 func TestOrderedHistoryPointsDownsamplesAcrossTheRequestedRange(t *testing.T) {
