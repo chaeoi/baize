@@ -24,7 +24,6 @@ const state = {
   publicHistoryMetric: 'torque_nm',
   publicHistoryDrawKey: '',
   publicStreamOptions: null,
-  publicRealtimeTicker: null,
   publicRealtimeStartedAt: 0,
 };
 
@@ -53,12 +52,6 @@ async function boot() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushPublicRecording(); });
   updateClock();
   window.setInterval(updateClock, 1000);
-  state.publicRealtimeTicker = window.setInterval(() => {
-    if (state.view === 'display' && isPublicSingleRealtime() && selectedPublicRobot()) {
-      state.publicHistoryDrawKey = '';
-      drawPublicHistory(state.publicHistory);
-    }
-  }, 1000);
   if (dashboardPath) {
     await bootDashboard();
     return;
@@ -1100,7 +1093,17 @@ function drawPublicHistory(points) {
   if (!grid || !selectedPublicRobot()) return;
   grid.classList.toggle('single-mode', state.publicHistoryMode === 'single');
   const specs = publicChartSpecs(points).map((spec) => ({ ...spec, values: finiteSeriesValues(points, spec) })).filter((spec) => spec.values.length > 0);
-  const drawKey = JSON.stringify([state.publicHistoryRobot, state.publicHistoryMode, state.publicHistoryMetric, state.publicHistoryMotor, points.length, points[0]?.at, points.at(-1)?.at, specs.map((spec) => spec.key), Math.round(grid.getBoundingClientRect().width)]);
+  const drawKey = JSON.stringify([
+    state.publicHistoryRobot,
+    state.publicHistoryMode,
+    state.publicHistoryMetric,
+    state.publicHistoryMotor,
+    points.length,
+    points[0]?.at,
+    points.at(-1)?.at,
+    specs.map((spec) => [spec.key, spec.values.at(-1)?.at, spec.values.at(-1)?.value]),
+    Math.round(grid.getBoundingClientRect().width),
+  ]);
   if (drawKey === state.publicHistoryDrawKey && grid.childElementCount) return;
   const empty = $('#public-history-empty');
   empty.classList.toggle('hidden', specs.length > 0 || state.publicHistoryLoading);
