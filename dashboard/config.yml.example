@@ -4,6 +4,6 @@ dashboard:
   data_dir: "/dashboard/data/control"
   history_data_dir: "/dashboard/data/history"
   history_retention: "2160h"
-  history_sample_interval: "1m"
+  history_sample_interval: "2s"
   frontend_dir: "/opt/baize/dashboard/frontend"
   cookie_secure: false

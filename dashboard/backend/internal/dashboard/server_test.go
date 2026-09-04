@@ -310,8 +310,8 @@ func TestHistorySampleLimitUsesSamplingRateAcrossTheRequestedRange(t *testing.T)
 
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/robots/history", nil)
 	limit, ok = historySampleLimit(httptest.NewRecorder(), request, 7*24*time.Hour, publicHostSampleRateHz, historyPointLimit)
-	if !ok || limit != 10_080 {
-		t.Fatalf("host weekly limit=%d ok=%v, want 10080", limit, ok)
+	if !ok || limit != 302_400 {
+		t.Fatalf("0.5Hz host weekly limit=%d ok=%v, want 302400", limit, ok)
 	}
 }
 

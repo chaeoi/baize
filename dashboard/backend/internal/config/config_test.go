@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadDashboardConfig(t *testing.T) {
@@ -50,6 +51,27 @@ func TestDefaultAdminCredentials(t *testing.T) {
 	}
 	if cfg.Dashboard.DataDir != "/dashboard/data/control" || cfg.Dashboard.HistoryDataDir != "/dashboard/data/history" {
 		t.Fatalf("unexpected default data paths: %+v", cfg.Dashboard)
+	}
+	if cfg.Dashboard.HistorySampleInterval.Value() != 2*time.Second {
+		t.Fatalf("default host sample interval = %s, want 2s", cfg.Dashboard.HistorySampleInterval.Value())
+	}
+}
+
+func TestHistorySampleIntervalMatchesAgentReportCadence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	if err := os.WriteFile(path, []byte(`dashboard:
+  data_dir: /data/control
+  history_data_dir: /data/history
+  history_sample_interval: 2s
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dashboard.HistorySampleInterval.Value() != 2*time.Second {
+		t.Fatalf("host sample interval = %s, want 2s", cfg.Dashboard.HistorySampleInterval.Value())
 	}
 }
 

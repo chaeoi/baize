@@ -29,7 +29,7 @@ const state = {
 };
 
 // Display rates are derived from the telemetry contracts, not fixed point-count windows.
-const PUBLIC_HOST_SAMPLE_RATE_HZ = 1 / 60;
+const PUBLIC_HOST_SAMPLE_RATE_HZ = 0.5;
 const PUBLIC_ALL_MOTOR_SAMPLE_RATE_HZ = 20;
 const PUBLIC_SINGLE_MOTOR_SAMPLE_RATE_HZ = 500;
 let publicRecorder = null;
