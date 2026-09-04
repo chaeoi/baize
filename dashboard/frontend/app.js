@@ -25,6 +25,7 @@ const state = {
   publicHistoryDrawKey: '',
   publicStreamOptions: null,
   publicRealtimeStartedAt: 0,
+  publicRealtimeClockOffset: null,
 };
 
 // Display rates are derived from the telemetry contracts, not fixed point-count windows.
@@ -85,6 +86,7 @@ function bindEvents() {
     state.publicHistoryRobot = null;
     state.publicHistoryDrawKey = '';
     state.publicRealtimeStartedAt = 0;
+    state.publicRealtimeClockOffset = null;
     if (!robot) return;
     if (publicHistoryIsRealtime()) {
       startPublicRealtime(robot);
@@ -102,6 +104,7 @@ function bindEvents() {
     state.publicHistoryRobot = null;
     state.publicHistoryDrawKey = '';
     state.publicRealtimeStartedAt = 0;
+    state.publicRealtimeClockOffset = null;
     const robot = selectedPublicRobot();
     if (robot && publicHistoryIsRealtime()) startPublicRealtime(robot);
     else if (robot) loadPublicHistory(robot);
@@ -317,6 +320,7 @@ function scheduleReconnect() {
 
 function receiveEvent(event, mode, rawEvent = '') {
   state.latestEventAt = Date.now();
+  if (mode === 'public' && publicHistoryIsRealtime()) updatePublicRealtimeClock(event.server_time);
   if (event.type === 'snapshot') state.robots = event.robots || [];
   if (event.type === 'removed') {
     const key = mode === 'admin' ? event.uuid : event.id;
@@ -469,6 +473,7 @@ function openPublicRobot(id) {
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
   state.publicRealtimeStartedAt = 0;
+  state.publicRealtimeClockOffset = null;
   state.publicHistoryRequestID += 1;
   state.publicHistoryLoading = false;
   window.history.pushState({}, '', `/robot/${encodeURIComponent(id)}`);
@@ -484,6 +489,7 @@ function showFleet(replace = false) {
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
   state.publicRealtimeStartedAt = 0;
+  state.publicRealtimeClockOffset = null;
   state.publicHistoryRequestID += 1;
   state.publicHistoryLoading = false;
   if (replace) window.history.replaceState({}, '', '/');
@@ -503,6 +509,7 @@ function syncPublicRoute() {
     state.publicHistoryRobot = null;
     state.publicHistoryDrawKey = '';
     state.publicRealtimeStartedAt = 0;
+    state.publicRealtimeClockOffset = null;
     state.publicHistoryRequestID += 1;
     state.publicHistoryLoading = false;
   }
@@ -555,6 +562,7 @@ function setPublicHistoryMode(mode) {
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
   state.publicRealtimeStartedAt = 0;
+  state.publicRealtimeClockOffset = null;
   renderPublicHistoryControls();
   const robot = selectedPublicRobot();
   syncPublicStream();
@@ -685,6 +693,7 @@ function startPublicRealtime(robot, reset = true) {
   if (reset && (state.publicHistoryRobot !== robot.id || !state.publicRealtimeStartedAt)) {
     state.publicHistory = [];
     state.publicRealtimeStartedAt = Date.now();
+    state.publicRealtimeClockOffset = null;
   }
   state.publicHistoryRobot = robot.id;
   syncPublicStream();
@@ -698,6 +707,8 @@ function appendPublicHostSample(robot) {
   const battery = summary.battery?.online ? summary.battery : null;
   const gpu = summary.gpu;
   const at = robot.collected_at || robot.last_seen;
+  const cutoff = realtimeSampleCutoff();
+  if (cutoff && Date.parse(at || '') < cutoff) return;
   const point = {
     at,
     cpu_percent: summary.cpu_percent,
@@ -721,10 +732,11 @@ function appendPublicMotorSamples(robot) {
   if (state.publicHistoryMode === 'host' || !robot?.motor_samples?.length) return;
   const stride = state.publicHistoryMode === 'motors' && publicHistoryIsRealtime() ? publicAllMotorRealtimeStride(robot) : 1;
   // Live events may contain a batch buffered before realtime was enabled.
-  const samples = publicHistoryIsRealtime() && state.publicRealtimeStartedAt
+  const cutoff = realtimeSampleCutoff();
+  const samples = cutoff
     ? robot.motor_samples.filter((sample) => {
       const timestamp = Date.parse(sample?.at || '');
-      return Number.isFinite(timestamp) && timestamp >= state.publicRealtimeStartedAt;
+      return Number.isFinite(timestamp) && timestamp >= cutoff;
     })
     : robot.motor_samples;
   const points = motorSamplesToPoints(samples, robot.motor_labels, stride, stride === 1);
@@ -732,6 +744,17 @@ function appendPublicMotorSamples(robot) {
   state.publicHistory = mergePublicMotorPoints(points, state.publicHistoryRobot === robot.id ? state.publicHistory : []);
   state.publicHistoryRobot = robot.id;
   state.publicHistoryDrawKey = '';
+}
+
+function updatePublicRealtimeClock(serverTime) {
+  if (!state.publicRealtimeStartedAt || state.publicRealtimeClockOffset !== null) return;
+  const serverTimestamp = Date.parse(serverTime || '');
+  if (Number.isFinite(serverTimestamp)) state.publicRealtimeClockOffset = serverTimestamp - Date.now();
+}
+
+function realtimeSampleCutoff() {
+  if (!publicHistoryIsRealtime() || !state.publicRealtimeStartedAt) return 0;
+  return state.publicRealtimeStartedAt + (state.publicRealtimeClockOffset || 0);
 }
 
 function startPublicRecording(robotID) {
