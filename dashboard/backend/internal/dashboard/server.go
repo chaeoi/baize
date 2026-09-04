@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -37,8 +38,10 @@ const (
 	maxCompressedTelemetryBytes = 16 << 20
 	maxReleaseBytes             = 128 << 20
 	fastMotorHistoryLimit       = 32_000
-	publicMotorHistoryLimit     = 1_200
-	publicSingleMotorLimit      = 6_000
+	historyPointLimit           = 32_000
+	publicHostSampleRateHz      = 1.0 / 60.0
+	publicAllMotorSampleRateHz  = 20.0
+	publicSingleSampleRateHz    = 500.0
 )
 
 var (
@@ -364,11 +367,20 @@ func (s *Server) publicRobotAction(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	to := time.Now().UTC()
+	if scope == "motors" {
+		if latest, found := s.store.LatestMotorSampleAt(uuid); found {
+			to = latest
+		}
+	}
 	from := to.Add(-duration)
 	var points []HistoryPoint
 	var err error
 	if scope == "motors" {
-		limit, motorID, valid := fastMotorHistoryOptions(writer, request, publicMotorHistoryLimit)
+		fallbackRate := float64(publicAllMotorSampleRateHz)
+		if request.URL.Query().Get("motor_id") != "" {
+			fallbackRate = publicSingleSampleRateHz
+		}
+		limit, motorID, valid := fastMotorHistoryOptions(writer, request, duration, fallbackRate)
 		if !valid {
 			return
 		}
@@ -378,7 +390,11 @@ func (s *Server) publicRobotAction(writer http.ResponseWriter, request *http.Req
 			points, err = s.store.FastMotorHistory(uuid, from, to, limit)
 		}
 	} else {
-		points, err = s.store.History(uuid, from, to, 5000)
+		limit, valid := historySampleLimit(writer, request, duration, publicHostSampleRateHz, historyPointLimit)
+		if !valid {
+			return
+		}
+		points, err = s.store.History(uuid, from, to, limit)
 	}
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "read telemetry history")
@@ -527,11 +543,20 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 			return
 		}
 		to := time.Now().UTC()
+		if scope == "motors" {
+			if latest, found := s.store.LatestMotorSampleAt(uuid); found {
+				to = latest
+			}
+		}
 		from := to.Add(-duration)
 		var points []HistoryPoint
 		var err error
 		if scope == "motors" {
-			limit, motorID, valid := fastMotorHistoryOptions(writer, request, fastMotorHistoryLimit)
+			fallbackRate := publicAllMotorSampleRateHz
+			if request.URL.Query().Get("motor_id") != "" {
+				fallbackRate = publicSingleSampleRateHz
+			}
+			limit, motorID, valid := fastMotorHistoryOptions(writer, request, duration, fallbackRate)
 			if !valid {
 				return
 			}
@@ -541,7 +566,11 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 				points, err = s.store.FastMotorHistory(uuid, from, to, limit)
 			}
 		} else {
-			points, err = s.store.History(uuid, from, to, 5000)
+			limit, valid := historySampleLimit(writer, request, duration, publicHostSampleRateHz, historyPointLimit)
+			if !valid {
+				return
+			}
+			points, err = s.store.History(uuid, from, to, limit)
 		}
 		if err != nil {
 			writeError(writer, http.StatusInternalServerError, "read telemetry history")
@@ -583,22 +612,40 @@ func historyDuration(writer http.ResponseWriter, request *http.Request, fast boo
 	return time.Duration(seconds) * time.Second, true
 }
 
-func fastMotorHistoryOptions(writer http.ResponseWriter, request *http.Request, fallback int) (int, string, bool) {
-	limit := fallback
-	if value := request.URL.Query().Get("limit"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 1 || parsed > fastMotorHistoryLimit {
-			writeError(writer, http.StatusBadRequest, "fast motor history limit must be between 1 and 32000")
-			return 0, "", false
-		}
-		limit = parsed
-	}
+func fastMotorHistoryOptions(writer http.ResponseWriter, request *http.Request, duration time.Duration, fallbackRate float64) (int, string, bool) {
 	motorID := request.URL.Query().Get("motor_id")
 	if motorID != "" && !motorIDPattern.MatchString(motorID) {
 		writeError(writer, http.StatusBadRequest, "invalid motor id")
 		return 0, "", false
 	}
+	limit, valid := historySampleLimit(writer, request, duration, fallbackRate, fastMotorHistoryLimit)
+	if !valid {
+		return 0, "", false
+	}
 	return limit, motorID, true
+}
+
+func historySampleLimit(writer http.ResponseWriter, request *http.Request, duration time.Duration, fallbackRate float64, maximum int) (int, bool) {
+	value := request.URL.Query().Get("sample_rate_hz")
+	rate := fallbackRate
+	if value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "history sample_rate_hz must be greater than 0 and at most 500")
+			return 0, false
+		}
+		rate = parsed
+	}
+	if math.IsNaN(rate) || math.IsInf(rate, 0) || rate <= 0 || rate > publicSingleSampleRateHz {
+		writeError(writer, http.StatusBadRequest, "history sample_rate_hz must be greater than 0 and at most 500")
+		return 0, false
+	}
+	limit := int(math.Ceil(duration.Seconds() * rate))
+	if limit < 1 || limit > maximum {
+		writeError(writer, http.StatusBadRequest, "history sampling rate is too high for the requested duration")
+		return 0, false
+	}
+	return limit, true
 }
 
 func allowPublicAPI(writer http.ResponseWriter) {

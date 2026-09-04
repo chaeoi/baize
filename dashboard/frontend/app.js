@@ -27,11 +27,10 @@ const state = {
   publicRealtimeStartedAt: 0,
 };
 
-const PUBLIC_REALTIME_WINDOW_SECONDS = 30 * 60;
-const PUBLIC_ALL_MOTOR_LIMIT = 1_200;
-const PUBLIC_ALL_MOTOR_REALTIME_SECONDS = 60;
-const PUBLIC_SINGLE_MOTOR_LIMIT = 6_000;
-const PUBLIC_SINGLE_CHART_LIMIT = 18_000;
+// Display rates are derived from the telemetry contracts, not fixed point-count windows.
+const PUBLIC_HOST_SAMPLE_RATE_HZ = 1 / 60;
+const PUBLIC_ALL_MOTOR_SAMPLE_RATE_HZ = 20;
+const PUBLIC_SINGLE_MOTOR_SAMPLE_RATE_HZ = 500;
 let publicRecorder = null;
 let publicRecordingDatabasePromise = null;
 
@@ -85,6 +84,7 @@ function bindEvents() {
     state.publicHistory = [];
     state.publicHistoryRobot = null;
     state.publicHistoryDrawKey = '';
+    state.publicRealtimeStartedAt = 0;
     if (!robot) return;
     if (publicHistoryIsRealtime()) {
       startPublicRealtime(robot);
@@ -554,6 +554,7 @@ function setPublicHistoryMode(mode) {
   state.publicHistory = [];
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
+  state.publicRealtimeStartedAt = 0;
   renderPublicHistoryControls();
   const robot = selectedPublicRobot();
   syncPublicStream();
@@ -567,7 +568,6 @@ function setPublicHistoryMode(mode) {
 
 function publicHistoryRange() { return $('#public-history-range')?.value || '1'; }
 function publicHistoryIsRealtime() { return (state.publicHistoryMode === 'single' || state.publicHistoryMode === 'motors') && publicHistoryRange() === 'realtime'; }
-function isPublicSingleRealtime() { return state.publicHistoryMode === 'single' && publicHistoryIsRealtime(); }
 
 function publicStreamOptionsForCurrent() {
   const robot = selectedPublicRobot();
@@ -601,9 +601,11 @@ async function loadPublicHistory(robot) {
     const fastScope = state.publicHistoryMode !== 'host';
     const range = fastScope ? 60 : Number(publicHistoryRange()) || 24;
     const requestedMotor = state.publicHistoryMode === 'single' ? state.publicHistoryMotor : '';
-    const limit = state.publicHistoryMode === 'single' && requestedMotor ? PUBLIC_SINGLE_MOTOR_LIMIT : PUBLIC_ALL_MOTOR_LIMIT;
+    const sampleRate = state.publicHistoryMode === 'single' && requestedMotor
+      ? PUBLIC_SINGLE_MOTOR_SAMPLE_RATE_HZ
+      : PUBLIC_ALL_MOTOR_SAMPLE_RATE_HZ;
     const motor = requestedMotor ? `&motor_id=${encodeURIComponent(requestedMotor)}` : '';
-    const query = fastScope ? `scope=motors&seconds=${range}&limit=${limit}${motor}` : `hours=${range}`;
+    const query = fastScope ? `scope=motors&seconds=${range}&sample_rate_hz=${sampleRate}${motor}` : `hours=${range}&sample_rate_hz=${PUBLIC_HOST_SAMPLE_RATE_HZ}`;
     const data = await api(`/api/v1/robots/${encodeURIComponent(robot.id)}/history?${query}`);
     if (state.selected !== robot.id || requestID !== state.publicHistoryRequestID) return;
     state.publicHistory = fastScope ? mergePublicMotorPoints(data.points || [], state.publicHistoryRobot === robot.id ? state.publicHistory : []) : (data.points || []);
@@ -630,10 +632,10 @@ async function loadPublicHistory(robot) {
   }
 }
 
-function motorSamplesToPoints(samples, labels = {}, stride = 1) {
+function motorSamplesToPoints(samples, labels = {}, stride = 1, preserveEnd = true) {
   const source = samples || [];
   const step = Math.max(1, Math.floor(Number(stride) || 1));
-  return source.filter((sample, index) => index % step === 0 || index === source.length - 1).map((sample) => ({
+  return source.filter((sample, index) => index % step === 0 || (preserveEnd && index === source.length - 1)).map((sample) => ({
     at: sample.at,
     motor_count: (sample.motors || []).length,
     motor_topic_online: true,
@@ -652,8 +654,7 @@ function publicAllMotorRealtimeStride(robot) {
     if (samples.length > 1 && Number.isFinite(span) && span > 0) sampleRate = (samples.length - 1) * 1000 / span;
   }
   if (!Number.isFinite(sampleRate) || sampleRate <= 0) return 1;
-  const targetRate = PUBLIC_ALL_MOTOR_LIMIT / PUBLIC_ALL_MOTOR_REALTIME_SECONDS;
-  return Math.max(1, Math.ceil(sampleRate / targetRate));
+  return Math.max(1, Math.ceil(sampleRate / PUBLIC_ALL_MOTOR_SAMPLE_RATE_HZ));
 }
 
 function mergePublicMotorPoints(fresh, existing = []) {
@@ -664,11 +665,7 @@ function mergePublicMotorPoints(fresh, existing = []) {
   });
   const points = [...byAt.values()].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
   if (!points.length) return [];
-  const seconds = isPublicSingleRealtime() ? PUBLIC_REALTIME_WINDOW_SECONDS : Number(publicHistoryRange()) || PUBLIC_ALL_MOTOR_REALTIME_SECONDS;
-  const cutoff = Date.parse(points.at(-1).at) - seconds * 1000;
-  const visible = points.filter((point) => Date.parse(point.at) >= cutoff);
-  const maxPoints = isPublicSingleRealtime() ? PUBLIC_SINGLE_CHART_LIMIT : (state.publicHistoryMode === 'single' ? PUBLIC_SINGLE_MOTOR_LIMIT : PUBLIC_ALL_MOTOR_LIMIT);
-  return visible.length > maxPoints ? visible.slice(-maxPoints) : visible;
+  return points;
 }
 
 function primePublicRealtimeHistory(robot) {
@@ -685,8 +682,10 @@ function primePublicRealtimeHistory(robot) {
 
 function startPublicRealtime(robot, reset = true) {
   if (!robot || !publicHistoryIsRealtime()) return;
-  if (reset && state.publicHistoryRobot !== robot.id) state.publicHistory = [];
-  if (reset && state.publicHistoryRobot !== robot.id) state.publicRealtimeStartedAt = Date.now();
+  if (reset && (state.publicHistoryRobot !== robot.id || !state.publicRealtimeStartedAt)) {
+    state.publicHistory = [];
+    state.publicRealtimeStartedAt = Date.now();
+  }
   state.publicHistoryRobot = robot.id;
   syncPublicStream();
   renderPublicHistoryControls();
@@ -721,7 +720,7 @@ function appendPublicHostSample(robot) {
 function appendPublicMotorSamples(robot) {
   if (state.publicHistoryMode === 'host' || !robot?.motor_samples?.length) return;
   const stride = state.publicHistoryMode === 'motors' && publicHistoryIsRealtime() ? publicAllMotorRealtimeStride(robot) : 1;
-  const points = motorSamplesToPoints(robot.motor_samples, robot.motor_labels, stride);
+  const points = motorSamplesToPoints(robot.motor_samples, robot.motor_labels, stride, stride === 1);
   state.publicHistory = mergePublicMotorPoints(points, state.publicHistoryRobot === robot.id ? state.publicHistory : []);
   state.publicHistoryRobot = robot.id;
   state.publicHistoryDrawKey = '';
@@ -1284,16 +1283,14 @@ function formatElapsedAxis(seconds) {
 function realtimeAxisStart(entries) {
   const valid = entries.filter((entry) => Number.isFinite(Date.parse(entry.at)));
   const first = Date.parse(valid[0]?.at);
-  const last = Date.parse(valid.at(-1)?.at);
-  if (!Number.isFinite(first)) return Number.isFinite(state.publicRealtimeStartedAt) && state.publicRealtimeStartedAt > 0 ? state.publicRealtimeStartedAt : Date.now();
-  // With one sample, give the point a short runway so it remains visible at the right edge.
-  return first === last ? first - 1000 : first;
+  if (!Number.isFinite(first)) return Date.now();
+  return first;
 }
 
 function realtimeAxisEnd(entries) {
   const last = Date.parse([...entries].reverse().find((entry) => Number.isFinite(Date.parse(entry.at)))?.at);
   const start = realtimeAxisStart(entries);
-  return Number.isFinite(last) ? Math.max(last, start + 1000) : start + 1000;
+  return Number.isFinite(last) ? Math.max(last, start) : start;
 }
 
 function formatChartTime(value) {
