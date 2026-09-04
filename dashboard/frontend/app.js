@@ -720,7 +720,15 @@ function appendPublicHostSample(robot) {
 function appendPublicMotorSamples(robot) {
   if (state.publicHistoryMode === 'host' || !robot?.motor_samples?.length) return;
   const stride = state.publicHistoryMode === 'motors' && publicHistoryIsRealtime() ? publicAllMotorRealtimeStride(robot) : 1;
-  const points = motorSamplesToPoints(robot.motor_samples, robot.motor_labels, stride, stride === 1);
+  // Live events may contain a batch buffered before realtime was enabled.
+  const samples = publicHistoryIsRealtime() && state.publicRealtimeStartedAt
+    ? robot.motor_samples.filter((sample) => {
+      const timestamp = Date.parse(sample?.at || '');
+      return Number.isFinite(timestamp) && timestamp >= state.publicRealtimeStartedAt;
+    })
+    : robot.motor_samples;
+  const points = motorSamplesToPoints(samples, robot.motor_labels, stride, stride === 1);
+  if (!points.length) return;
   state.publicHistory = mergePublicMotorPoints(points, state.publicHistoryRobot === robot.id ? state.publicHistory : []);
   state.publicHistoryRobot = robot.id;
   state.publicHistoryDrawKey = '';
