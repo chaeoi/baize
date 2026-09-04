@@ -105,7 +105,7 @@ func NewStore(dataDir, historyDir string, options StoreOptions) (*Store, error) 
 		options.HistoryRetention = 90 * 24 * time.Hour
 	}
 	if options.HistorySampleInterval <= 0 {
-		options.HistorySampleInterval = time.Minute
+		options.HistorySampleInterval = 2 * time.Second
 	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "releases"), 0o750); err != nil {
 		return nil, err
@@ -777,7 +777,7 @@ func makeHistoryPoint(telemetry model.Telemetry) HistoryPoint {
 func (s *Store) History(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if limit <= 0 || limit > 32_000 {
+	if limit <= 0 || limit > historyPointLimit {
 		limit = 1440
 	}
 	return s.tsdb.History(uuid, from, to, limit)

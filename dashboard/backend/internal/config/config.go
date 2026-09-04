@@ -58,7 +58,7 @@ func Default() Config {
 		DataDir:               "/dashboard/data/control",
 		HistoryDataDir:        "/dashboard/data/history",
 		HistoryRetention:      Duration(90 * 24 * time.Hour),
-		HistorySampleInterval: Duration(time.Minute),
+		HistorySampleInterval: Duration(2 * time.Second),
 		FrontendDir:           "/opt/baize/dashboard/frontend",
 	}}
 }
@@ -151,8 +151,8 @@ func (c Config) Validate() error {
 	if d.HistoryRetention.Value() < 24*time.Hour {
 		return errors.New("dashboard.history_retention must be at least 24h")
 	}
-	if d.HistorySampleInterval.Value() < 10*time.Second {
-		return errors.New("dashboard.history_sample_interval must be at least 10s")
+	if d.HistorySampleInterval.Value() < 2*time.Second {
+		return errors.New("dashboard.history_sample_interval must be at least 2s")
 	}
 	if !filepath.IsAbs(d.FrontendDir) {
 		return errors.New("dashboard.frontend_dir must be an absolute path")

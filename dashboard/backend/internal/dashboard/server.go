@@ -38,8 +38,8 @@ const (
 	maxCompressedTelemetryBytes = 16 << 20
 	maxReleaseBytes             = 128 << 20
 	fastMotorHistoryLimit       = 32_000
-	historyPointLimit           = 32_000
-	publicHostSampleRateHz      = 1.0 / 60.0
+	historyPointLimit           = 400_000
+	publicHostSampleRateHz      = 0.5
 	publicAllMotorSampleRateHz  = 20.0
 	publicSingleSampleRateHz    = 500.0
 )
