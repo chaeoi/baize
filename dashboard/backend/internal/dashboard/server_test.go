@@ -295,6 +295,26 @@ func TestPublicHistoryIsCrossOriginAndRedacted(t *testing.T) {
 	}
 }
 
+func TestHistorySampleLimitUsesSamplingRateAcrossTheRequestedRange(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/robots/history?sample_rate_hz=20", nil)
+	limit, ok := historySampleLimit(httptest.NewRecorder(), request, time.Minute, publicAllMotorSampleRateHz, fastMotorHistoryLimit)
+	if !ok || limit != 1_200 {
+		t.Fatalf("20Hz one-minute limit=%d ok=%v, want 1200", limit, ok)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/robots/history?sample_rate_hz=500", nil)
+	limit, ok = historySampleLimit(httptest.NewRecorder(), request, time.Minute, publicSingleSampleRateHz, fastMotorHistoryLimit)
+	if !ok || limit != 30_000 {
+		t.Fatalf("500Hz one-minute limit=%d ok=%v, want 30000", limit, ok)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/robots/history", nil)
+	limit, ok = historySampleLimit(httptest.NewRecorder(), request, 7*24*time.Hour, publicHostSampleRateHz, historyPointLimit)
+	if !ok || limit != 10_080 {
+		t.Fatalf("host weekly limit=%d ok=%v, want 10080", limit, ok)
+	}
+}
+
 func TestBootstrapLoginForcesPasswordChange(t *testing.T) {
 	store := newTestStore(t)
 	server := NewServer(ServerConfig{AgentToken: "agent-token-long-enough-for-tests", AdminUser: "admin", JWTSecret: "jwt-secret-long-enough-for-tests-123456"}, store)

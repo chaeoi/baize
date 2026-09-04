@@ -539,6 +539,22 @@ func (s *Store) Robot(uuid string) (RobotRecord, bool) {
 	return record, ok
 }
 
+func (s *Store) LatestMotorSampleAt(uuid string) (time.Time, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.robots[uuid]
+	if !ok || record.Telemetry.Motors == nil {
+		return time.Time{}, false
+	}
+	var latest time.Time
+	for _, sample := range record.Telemetry.Motors.Samples {
+		if sample.At.After(latest) {
+			latest = sample.At
+		}
+	}
+	return latest, !latest.IsZero()
+}
+
 func (s *Store) SetRemark(uuid, remark string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -761,7 +777,7 @@ func makeHistoryPoint(telemetry model.Telemetry) HistoryPoint {
 func (s *Store) History(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if limit <= 0 || limit > 5000 {
+	if limit <= 0 || limit > 32_000 {
 		limit = 1440
 	}
 	return s.tsdb.History(uuid, from, to, limit)

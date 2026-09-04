@@ -8,7 +8,9 @@ SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌
 
 主机、电池、GPU 和电机摘要按 `history_sample_interval`（默认 1 分钟）写入 `host`，
 默认保留 90 天；500 Hz 电机原始位置、速度和转矩写入独立的 `motor` 时间序列，默认保留
-2 分钟。长周期查询会覆盖完整时间范围降采样，短窗口电机查询保留原始采样点。
+2 分钟。面板显示采样率固定为：主控状态 1/分钟（1/60 Hz）、全部电机 20 Hz、单个电机
+500 Hz。历史范围决定时间跨度，接口会按对应采样率取样并覆盖完整范围；实时模式从点击后
+收到的第一批数据开始持续累积，不限制固定点数窗口。
 
 型号能力维护在 `shared/robotmodel/models.yml` 的单文件 YAML catalogue 中，GitHub
 构建时同时嵌入 Agent 二进制和 Dashboard Docker：Agent 只读取 ROS2 状态话题，BMS CAN
