@@ -19,5 +19,4 @@ gpu:
 
 update:
   enabled: true
-  automatic: true
   check_interval: "1m"

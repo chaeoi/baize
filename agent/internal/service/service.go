@@ -37,6 +37,7 @@ var embeddedROS2Subscriber []byte
 var (
 	installDir              = "/opt/baize/agent"
 	installedBinary         = filepath.Join(installDir, "baize-agent")
+	installedRuntime        = filepath.Join(installDir, "bin", "baize-agent")
 	installedROS2Subscriber = filepath.Join(installDir, "baize-ros2-subscriber")
 	installedConfig         = filepath.Join(installDir, "config.yml")
 	unitPath                = "/etc/systemd/system/baize-agent.service"
@@ -177,6 +178,10 @@ func install(options installOptions, executablePath string) error {
 	if err != nil {
 		return fmt.Errorf("parse service group id: %w", err)
 	}
+	userID, err := strconv.Atoi(serviceAccount.Uid)
+	if err != nil {
+		return fmt.Errorf("parse service user id: %w", err)
+	}
 	plan, err := planConfig(options)
 	if err != nil {
 		return err
@@ -200,6 +205,19 @@ func install(options installOptions, executablePath string) error {
 		return err
 	}
 	if err := installBinary(executablePath); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(installedRuntime), 0o750); err != nil {
+		return err
+	}
+	if err := os.Chown(filepath.Dir(installedRuntime), userID, groupID); err != nil {
+		return err
+	}
+	content, err := os.ReadFile(installedBinary)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(installedRuntime, content, 0o755, userID, groupID); err != nil {
 		return err
 	}
 	if err := writeFileAtomic(installedROS2Subscriber, embeddedROS2Subscriber, 0o755, 0, 0); err != nil {
@@ -272,20 +290,20 @@ func planConfig(options installOptions) (configPlan, error) {
 		if err := options.validateProvided(); err != nil {
 			return configPlan{}, err
 		}
-		base := config.Default().Agent
+		base := config.Default()
 		if !options.forceConfig {
 			if existing, err := config.Load(installedConfig); err == nil {
-				base = existing.Agent
+				base = existing
 			}
 		}
-		if base.UUID == "" {
+		if base.Agent.UUID == "" {
 			uuid, err := newUUID()
 			if err != nil {
 				return configPlan{}, err
 			}
-			base.UUID = uuid
+			base.Agent.UUID = uuid
 		}
-		if err := applyOptions(&base, options); err != nil {
+		if err := applyOptions(&base.Agent, options); err != nil {
 			return configPlan{}, err
 		}
 		content, valid, err := renderInstallConfig(base)
@@ -376,7 +394,8 @@ func configuredContent(options installOptions) ([]byte, error) {
 	if err := options.validateProvided(); err != nil {
 		return nil, err
 	}
-	agent := config.Default().Agent
+	cfg := config.Default()
+	agent := &cfg.Agent
 	if options.uuid == "" {
 		uuid, err := newUUID()
 		if err != nil {
@@ -384,10 +403,10 @@ func configuredContent(options installOptions) ([]byte, error) {
 		}
 		agent.UUID = uuid
 	}
-	if err := applyOptions(&agent, options); err != nil {
+	if err := applyOptions(agent, options); err != nil {
 		return nil, err
 	}
-	content, valid, err := renderInstallConfig(agent)
+	content, valid, err := renderInstallConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -397,13 +416,21 @@ func configuredContent(options installOptions) ([]byte, error) {
 	return content, nil
 }
 
-func renderInstallConfig(agent config.AgentConfig) ([]byte, bool, error) {
+func renderInstallConfig(cfg config.Config) ([]byte, bool, error) {
+	agent := cfg.Agent
 	built, err := config.Build(agent)
 	if err == nil {
-		return []byte(renderConfig(built.Agent)), true, nil
+		cfg.Agent = built.Agent
+		cfg.Motor, cfg.BMS = built.Motor, built.BMS
+		if err := cfg.Validate(); err != nil {
+			return nil, false, err
+		}
+		content, err := config.Marshal(cfg)
+		return content, true, err
 	}
 	if agent.UUID == "" || agent.RobotCode == "" || agent.RobotModel == "" || agent.DashboardURL == "" || agent.Token == "" {
-		return []byte(renderConfig(agent)), false, nil
+		content, err := config.Marshal(cfg)
+		return content, false, err
 	}
 	return nil, false, err
 }
@@ -528,13 +555,8 @@ func defaultConfig(uuid string) string {
 	}
 	lines.WriteString("model: \"\"\n\nagent:\n  uuid: ")
 	lines.WriteString(yamlString(uuid))
-	lines.WriteString("\n  robot_code: \"\"\n  dashboard_url: \"\"\n  token: \"\"\n  report_interval: \"2s\"\n  http_timeout: \"10s\"\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  automatic: true\n  check_interval: \"1m\"\n")
+	lines.WriteString("\n  robot_code: \"\"\n  dashboard_url: \"\"\n  token: \"\"\n  report_interval: \"2s\"\n  http_timeout: \"10s\"\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  check_interval: \"1m\"\n")
 	return lines.String()
-}
-
-func renderConfig(agent config.AgentConfig) string {
-	return fmt.Sprintf("model: %s\n\nagent:\n  uuid: %s\n  robot_code: %s\n  dashboard_url: %s\n  token: %s\n  report_interval: %s\n  http_timeout: %s\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  automatic: true\n  check_interval: \"1m\"\n",
-		yamlString(agent.RobotModel), yamlString(agent.UUID), yamlString(agent.RobotCode), yamlString(agent.DashboardURL), yamlString(agent.Token), yamlString(agent.ReportInterval.String()), yamlString(agent.HTTPTimeout.String()))
 }
 
 func yamlString(value string) string {
@@ -546,7 +568,7 @@ func containsControl(value string) bool {
 }
 
 func serviceUnit() string {
-	return "[Unit]\nDescription=Baize robot monitoring agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=ubuntu\nGroup=ubuntu\nWorkingDirectory=/opt/baize/agent\nExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml\nRestart=always\nRestartSec=3\nEnvironment=ROS_LOG_DIR=/var/log/baize-agent/ros\nLogsDirectory=baize-agent\nLogsDirectoryMode=0750\nStateDirectory=baize-agent\nStateDirectoryMode=0750\nNoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nReadOnlyPaths=/opt/baize/agent\nPrivateTmp=true\nProtectKernelTunables=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\n\n[Install]\nWantedBy=multi-user.target\n"
+	return "[Unit]\nDescription=Baize robot monitoring agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=ubuntu\nGroup=ubuntu\nWorkingDirectory=/opt/baize/agent\nExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml\nRestart=always\nRestartSec=3\nEnvironment=ROS_LOG_DIR=/var/log/baize-agent/ros\nLogsDirectory=baize-agent\nLogsDirectoryMode=0750\nStateDirectory=baize-agent\nStateDirectoryMode=0750\nNoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nReadOnlyPaths=/opt/baize/agent\nReadWritePaths=/opt/baize/agent/bin\nPrivateTmp=true\nProtectKernelTunables=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\n\n[Install]\nWantedBy=multi-user.target\n"
 }
 
 const serviceUsage = `Usage: baize-agent service <command>

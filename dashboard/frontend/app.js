@@ -15,6 +15,8 @@ const state = {
   history: [],
   historyRobot: null,
   historyLoading: false,
+  historyRequestID: 0,
+  historyController: null,
   publicHistory: [],
   publicHistoryRobot: null,
   publicHistoryLoading: false,
@@ -73,14 +75,13 @@ function bindEvents() {
   $('#robot-search').addEventListener('input', renderRobotList);
   $('#remark-button').addEventListener('click', openRemark);
   $('#remark-form').addEventListener('submit', saveRemark);
-  $('#update-button').addEventListener('click', openUpdate);
-  $('#update-form').addEventListener('submit', assignUpdate);
-  $('#clear-update-button').addEventListener('click', clearUpdate);
   $('#release-form').addEventListener('submit', uploadRelease);
   $('#delete-robot-button').addEventListener('click', openDeleteRobot);
   $('#delete-robot-form').addEventListener('submit', deleteRobot);
   $('#history-range').addEventListener('change', loadHistory);
   $('#public-history-range').addEventListener('change', () => {
+    state.publicHistoryRequestID += 1;
+    state.publicHistoryLoading = false;
     const robot = selectedPublicRobot();
     state.publicHistory = [];
     state.publicHistoryRobot = null;
@@ -99,6 +100,8 @@ function bindEvents() {
   });
   $('#public-metric-select').addEventListener('change', (event) => { state.publicHistoryMetric = event.target.value; state.publicHistoryDrawKey = ''; drawPublicHistory(state.publicHistory); });
   $('#public-motor-select').addEventListener('change', (event) => {
+    state.publicHistoryRequestID += 1;
+    state.publicHistoryLoading = false;
     state.publicHistoryMotor = event.target.value;
     state.publicHistory = [];
     state.publicHistoryRobot = null;
@@ -264,6 +267,7 @@ function openStream(mode, publicOptions = null) {
   let path = mode === 'admin' ? '/api/v1/admin/ws/robots' : '/api/v1/ws/robots';
   if (mode === 'public' && publicOptions?.includeSamples) {
     const query = new URLSearchParams({ include_samples: '1', robot_id: publicOptions.robotID });
+    if (publicOptions.motorID) query.set('motor_ids', publicOptions.motorID);
     path += `?${query}`;
   }
   const socket = new WebSocket(`${scheme}://${window.location.host}${path}`);
@@ -312,8 +316,20 @@ function scheduleReconnect() {
   if (state.reconnectTimer || !state.streamMode) return;
   const delay = Math.min(1000 * (2 ** Math.min(state.reconnectAttempt, 4)), 15000);
   state.reconnectAttempt += 1;
-  state.reconnectTimer = setTimeout(() => {
+  state.reconnectTimer = setTimeout(async () => {
     state.reconnectTimer = null;
+    if (state.streamMode === 'admin') {
+      try {
+        const session = await api('/api/v1/session');
+        if (!session.authenticated) {
+          state.authenticated = false;
+          state.streamMode = '';
+          showLoginGate();
+          focusPassword();
+          return;
+        }
+      } catch { scheduleReconnect(); return; }
+    }
     openStream(state.streamMode, state.streamMode === 'public' ? state.publicStreamOptions : null);
   }, delay);
 }
@@ -334,7 +350,7 @@ function receiveEvent(event, mode, rawEvent = '') {
     if (mode === 'public' && state.selected === event.robot.id) {
       recordPublicTelemetry(rawEvent, event.robot);
       if (publicHistoryIsRealtime() && state.publicHistoryMode === 'host') appendPublicHostSample(event.robot);
-      if (state.publicHistoryMode !== 'host') appendPublicMotorSamples(event.robot);
+      if (publicHistoryIsRealtime() && state.publicHistoryMode !== 'host') appendPublicMotorSamples(event.robot);
     }
   }
   if (event.server_time && $('#fleet-latency')) {
@@ -529,8 +545,10 @@ function renderPublicHistoryControls() {
     range.value = state.publicHistoryMode === 'host' ? '1' : '60';
     range.dataset.scope = rangeScope;
   }
-  const latestMotorPoint = [...state.publicHistory].reverse().find((point) => point.motors?.length);
-  const motors = new Map((latestMotorPoint?.motors || []).map((motor) => [motor.id, motor.id]));
+  const motors = new Map(Object.entries(selectedPublicRobot()?.motor_labels || {}));
+  for (const descriptor of motorDescriptors(state.publicHistory)) {
+    if (!motors.has(descriptor.id)) motors.set(descriptor.id, descriptor.label);
+  }
   const motorSelect = $('#public-motor-select');
   const current = state.publicHistoryMotor;
   const motorOptions = [...motors.entries()].map(([id, label]) => `<option value="${escapeHTML(id)}">${escapeHTML(label)}</option>`).join('');
@@ -557,6 +575,8 @@ function renderPublicHistoryControls() {
 }
 
 function setPublicHistoryMode(mode) {
+  state.publicHistoryRequestID += 1;
+  state.publicHistoryLoading = false;
   state.publicHistoryMode = mode;
   state.publicHistory = [];
   state.publicHistoryRobot = null;
@@ -582,7 +602,7 @@ function publicStreamOptionsForCurrent() {
   if (!robot) return null;
   const recording = publicRecorder?.active && publicRecorder.robotID === robot.id;
   if (!recording && !publicHistoryIsRealtime()) return null;
-  return { includeSamples: true, robotID: robot.id };
+  return { includeSamples: true, robotID: robot.id, motorID: !recording && state.publicHistoryMode === 'single' ? state.publicHistoryMotor : '' };
 }
 
 function syncPublicStream() {
@@ -590,7 +610,8 @@ function syncPublicStream() {
   const desired = publicStreamOptionsForCurrent();
   const current = state.publicStreamOptions;
   const same = (desired?.includeSamples || false) === (current?.includeSamples || false)
-    && (desired?.robotID || '') === (current?.robotID || '');
+    && (desired?.robotID || '') === (current?.robotID || '')
+    && (desired?.motorID || '') === (current?.motorID || '');
   if (!same || !state.stream) openStream('public', desired);
 }
 
@@ -613,10 +634,10 @@ async function loadPublicHistory(robot) {
       ? PUBLIC_SINGLE_MOTOR_SAMPLE_RATE_HZ
       : PUBLIC_ALL_MOTOR_SAMPLE_RATE_HZ;
     const motor = requestedMotor ? `&motor_id=${encodeURIComponent(requestedMotor)}` : '';
-    const query = fastScope ? `scope=motors&seconds=${range}&sample_rate_hz=${sampleRate}${motor}` : `hours=${range}&sample_rate_hz=${PUBLIC_HOST_SAMPLE_RATE_HZ}`;
+    const query = fastScope ? `scope=motors&seconds=${range}&sample_rate_hz=${sampleRate}${motor}` : `scope=host&hours=${range}&sample_rate_hz=${PUBLIC_HOST_SAMPLE_RATE_HZ}`;
     const data = await api(`/api/v1/robots/${encodeURIComponent(robot.id)}/history?${query}`);
     if (state.selected !== robot.id || requestID !== state.publicHistoryRequestID) return;
-    state.publicHistory = fastScope ? mergePublicMotorPoints(data.points || [], state.publicHistoryRobot === robot.id ? state.publicHistory : []) : (data.points || []);
+    state.publicHistory = data.points || [];
     state.publicHistoryRobot = robot.id;
     state.publicHistoryDrawKey = '';
     state.publicHistoryLoading = false;
@@ -666,8 +687,20 @@ function publicAllMotorRealtimeStride(robot) {
 }
 
 function mergePublicMotorPoints(fresh, existing = []) {
+  const incoming = fresh.filter(point => point?.at && Number.isFinite(Date.parse(point.at)))
+    .map(point => ({ ...point, at: new Date(point.at).toISOString() }))
+    .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  if (!incoming.length) return existing;
+  if (!existing.length || Date.parse(incoming[0].at) > Date.parse(existing.at(-1).at)) {
+    let last = existing.at(-1)?.at;
+    for (const point of incoming) {
+      if (point.at !== last) existing.push(point);
+      last = point.at;
+    }
+    return existing;
+  }
   const byAt = new Map();
-  [...existing, ...fresh].forEach((point) => {
+  [...existing, ...incoming].forEach((point) => {
     if (!point?.at || !Number.isFinite(Date.parse(point.at))) return;
     byAt.set(new Date(point.at).toISOString(), { ...point, at: new Date(point.at).toISOString() });
   });
@@ -729,7 +762,7 @@ function appendPublicHostSample(robot) {
 }
 
 function appendPublicMotorSamples(robot) {
-  if (state.publicHistoryMode === 'host' || !robot?.motor_samples?.length) return;
+  if (!publicHistoryIsRealtime() || state.publicHistoryMode === 'host' || !robot?.motor_samples?.length) return;
   const stride = state.publicHistoryMode === 'motors' && publicHistoryIsRealtime() ? publicAllMotorRealtimeStride(robot) : 1;
   // Live events may contain a batch buffered before realtime was enabled.
   const cutoff = realtimeSampleCutoff();
@@ -740,6 +773,9 @@ function appendPublicMotorSamples(robot) {
     })
     : robot.motor_samples;
   const points = motorSamplesToPoints(samples, robot.motor_labels, stride, stride === 1);
+  if (state.publicHistoryMode === 'single' && state.publicHistoryMotor) {
+    points.forEach(point => { point.motors = point.motors.filter(motor => motor.id === state.publicHistoryMotor); });
+  }
   if (!points.length) return;
   state.publicHistory = mergePublicMotorPoints(points, state.publicHistoryRobot === robot.id ? state.publicHistory : []);
   state.publicHistoryRobot = robot.id;
@@ -956,9 +992,8 @@ function renderSettings() {
   ]);
   $('#settings-config-facts').innerHTML = facts([
     ['系统采集', telemetry.system ? '已启用' : '未上报'], ['CPU 核心', telemetry.system?.cpu_cores || '-'], ['磁盘路径', (telemetry.system?.disks || []).map((disk) => disk.path).join(', ') || '-'],
-    ['电机 Topic', motor.topic || '-'], ['电机来源', motor.source || '-'], ['BMS 协议', bms.protocol || '-'], ['BMS Topic', bms.interface || '-'], ['目标版本', robot.desired_version || '跟随发布']
+    ['电机 Topic', motor.topic || '-'], ['电机来源', motor.source || '-'], ['BMS 协议', bms.protocol || '-'], ['BMS Topic', bms.interface || '-']
   ]);
-  $('#update-button').disabled = !state.releases.some((release) => release.os === robot.os && release.arch === robot.arch);
   $('#settings-session').textContent = state.adminUser;
   renderReleases();
   if (state.historyRobot === robot.uuid) drawHistoryChart(state.history);
@@ -988,31 +1023,6 @@ async function saveRemark(event) {
   } catch (error) { toast(error.message, true); }
 }
 
-function openUpdate() {
-  const robot = selectedAdminRobot(); if (!robot) return;
-  const versions = state.releases.filter((release) => release.os === robot.os && release.arch === robot.arch);
-  $('#update-dialog-title').textContent = `${robot.code} · 指定版本`;
-  $('#update-version').innerHTML = versions.map((release) => `<option value="${escapeHTML(release.version)}">${escapeHTML(release.version)} · ${bytes(release.size)}</option>`).join('');
-  $('#update-dialog').showModal();
-}
-
-async function assignUpdate(event) {
-  event.preventDefault();
-  const robot = selectedAdminRobot(); if (!robot) return;
-  try {
-    await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/update`, { method: 'POST', body: JSON.stringify({ version: $('#update-version').value }) }, true);
-    $('#update-dialog').close(); toast('更新指令已下发');
-  } catch (error) { toast(error.message, true); }
-}
-
-async function clearUpdate() {
-  const robot = selectedAdminRobot(); if (!robot) return;
-  try {
-    await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/update`, { method: 'DELETE' }, true);
-    $('#update-dialog').close(); toast('已恢复跟随发布');
-  } catch (error) { toast(error.message, true); }
-}
-
 async function loadReleases() {
   try {
     const data = await api('/api/v1/admin/releases', {}, true);
@@ -1023,11 +1033,15 @@ async function loadReleases() {
 
 async function uploadRelease(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
+  const element = event.currentTarget;
+  const button = element.querySelector('button[type="submit"]');
+  const form = new FormData(element);
+  button.disabled = true;
   try {
     await api('/api/v1/admin/releases', { method: 'POST', body: form }, true);
-    event.currentTarget.reset(); await loadReleases(); toast('Agent 发布已上传');
+    element.reset(); await loadReleases(); toast('Agent 发布已上传');
   } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
 }
 
 function renderReleases() {
@@ -1065,22 +1079,27 @@ async function deleteRobot(event) {
 
 async function loadHistory() {
   const robot = selectedAdminRobot();
-  if (!robot || state.historyLoading) return;
+  state.historyController?.abort();
+  const requestID = ++state.historyRequestID;
+  if (!robot) { state.historyLoading = false; return; }
+  const controller = new AbortController();
+  state.historyController = controller;
   state.historyLoading = true;
   $('#history-empty').textContent = '正在读取历史采样';
   $('#history-empty').classList.remove('hidden');
   try {
     const hours = Number($('#history-range').value) || 24;
-    const data = await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/history?hours=${hours}`, {}, true);
-    if (state.selected !== robot.uuid) return;
+    const data = await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/history?scope=host&hours=${hours}`, { signal: controller.signal }, true);
+    if (state.selected !== robot.uuid || requestID !== state.historyRequestID) return;
     state.history = data.points || [];
     state.historyRobot = robot.uuid;
     drawHistoryChart(state.history);
   } catch (error) {
+    if (error.name === 'AbortError' || requestID !== state.historyRequestID) return;
     $('#history-empty').textContent = error.message;
     toast(error.message, true);
   } finally {
-    state.historyLoading = false;
+    if (requestID === state.historyRequestID) state.historyLoading = false;
   }
 }
 
@@ -1105,6 +1124,8 @@ function drawHistoryChart(points) {
   const padding = { top: 15, right: 16, bottom: 28, left: 38 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
+  const startAt = Date.parse(available[0].at);
+  const timeSpan = Math.max(1, Date.parse(available.at(-1).at) - startAt);
   context.strokeStyle = '#dfe6e8';
   context.fillStyle = '#73818a';
   context.font = '11px "LXGW WenKai Screen", system-ui';
@@ -1123,7 +1144,7 @@ function drawHistoryChart(points) {
     available.forEach((point, index) => {
       const value = Number(point[field]);
       if (!Number.isFinite(value)) { started = false; return; }
-      const x = padding.left + chartWidth * (index / (available.length - 1));
+      const x = padding.left + chartWidth * ((Date.parse(point.at) - startAt) / timeSpan);
       const y = padding.top + chartHeight * (1 - Math.max(0, Math.min(100, value)) / 100);
       if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
     });
@@ -1196,8 +1217,11 @@ function publicChartSpecs(points) {
 }
 
 function motorDescriptors(points) {
-  const point = [...points].reverse().find((item) => item.motors?.length);
-  return (point?.motors || []).map((motor, index) => ({ id: motor.id, label: motor.id, index }));
+  let point;
+  for (let index = points.length - 1; index >= 0; index--) {
+    if (points[index].motors?.length) { point = points[index]; break; }
+  }
+  return (point?.motors || []).map((motor, index) => ({ id: motor.id, label: motor.label || motor.id, index }));
 }
 
 function motorValue(point, id, index, field) {
@@ -1208,6 +1232,23 @@ function motorValue(point, id, index, field) {
 
 function finiteSeriesValues(points, spec) {
   return points.map((point) => ({ at: point.at, value: Number(spec.value(point)) })).filter((entry) => Number.isFinite(entry.value));
+}
+
+// Preserve extrema and endpoints while keeping canvas work proportional to its width.
+function sampleChartEntries(entries, pixels) {
+  if (entries.length <= pixels * 4) return entries;
+  const result = [];
+  const size = Math.ceil(entries.length / pixels);
+  for (let start = 0; start < entries.length; start += size) {
+    const end = Math.min(entries.length - 1, start + size - 1);
+    let min = start, max = start;
+    for (let index = start + 1; index <= end; index++) {
+      if (entries[index].value < entries[min].value) min = index;
+      if (entries[index].value > entries[max].value) max = index;
+    }
+    [...new Set([start, min, max, end])].sort((a, b) => a - b).forEach(index => result.push(entries[index]));
+  }
+  return result;
 }
 
 function drawSingleMetricChart(canvas, spec) {
@@ -1226,8 +1267,11 @@ function drawSingleMetricChart(canvas, spec) {
   const padding = { top: 12, right: 12, bottom: 28, left: 49 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  let min = spec.range?.[0] ?? Math.min(...finite);
-  let max = spec.range?.[1] ?? Math.max(...finite);
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of finite) { min = Math.min(min, value); max = Math.max(max, value); }
+  min = spec.range?.[0] ?? min;
+  max = spec.range?.[1] ?? max;
   if (!spec.range) {
     if (min === max) { const delta = Math.max(Math.abs(min) * 0.12, 1); min -= delta; max += delta; }
     else { const delta = (max - min) * 0.12; min -= delta; max += delta; }
@@ -1243,7 +1287,7 @@ function drawSingleMetricChart(canvas, spec) {
     context.fillText(formatAxisValue(value, spec.unit), 3, y + 4);
   }
   const realtime = Boolean(spec.realtime);
-  const windowStart = realtime ? realtimeAxisStart(entries) : 0;
+  const windowStart = realtimeAxisStart(entries);
   const windowEnd = realtime ? realtimeAxisEnd(entries) : Date.parse(entries.at(-1)?.at);
   const windowDuration = Math.max(1, windowEnd - windowStart);
   if (realtime) {
@@ -1263,10 +1307,12 @@ function drawSingleMetricChart(canvas, spec) {
   context.lineCap = 'round';
   context.beginPath();
   let started = false;
-  values.forEach((value, index) => {
+  const renderedEntries = sampleChartEntries(entries, Math.max(2, Math.floor(chartWidth)));
+  renderedEntries.forEach((entry, index) => {
+    const value = entry.value;
     if (!Number.isFinite(value)) { started = false; return; }
-    const timestamp = Date.parse(entries[index]?.at);
-    const ratioX = realtime && Number.isFinite(timestamp) ? Math.max(0, Math.min(1, (timestamp - windowStart) / windowDuration)) : (entries.length === 1 ? .5 : index / (entries.length - 1));
+    const timestamp = Date.parse(entry.at);
+    const ratioX = Number.isFinite(timestamp) ? Math.max(0, Math.min(1, (timestamp - windowStart) / windowDuration)) : (renderedEntries.length === 1 ? .5 : index / (renderedEntries.length - 1));
     const x = padding.left + chartWidth * ratioX;
     const y = padding.top + chartHeight * (1 - (value - min) / (max - min));
     if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
@@ -1350,6 +1396,18 @@ function meterClass(value) {
 function facts(items) { return items.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value === undefined || value === null || value === '' ? '-' : String(value))}</dd></div>`).join(''); }
 function updateClock() {
   $('#server-clock').textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  if (state.view === 'settings') {
+    state.robots.forEach(robot => {
+      const label = document.querySelector(`.settings-robot-item[data-key="${CSS.escape(robot.uuid)}"] .status-label`);
+      const online = isAdminOnline(robot);
+      if (label) { label.textContent = online ? '在线' : '离线'; label.classList.toggle('online', online); }
+      if (robot.uuid === state.selected) {
+        $('#settings-robot-status').textContent = online ? '在线' : '离线';
+        $('#settings-robot-status').classList.toggle('online', online);
+      }
+    });
+    return;
+  }
   if (state.view !== 'display' || !state.robots.length) return;
   updatePublicLiveState();
 }

@@ -116,6 +116,7 @@ type streamClient struct {
 	done          chan struct{}
 	stopOnce      sync.Once
 	publicOptions *publicStreamOptions
+	sessionID     string
 }
 
 // publicStreamOptions lets a detail page receive high-rate samples only for
@@ -157,6 +158,17 @@ func (hub *streamHub) remove(client *streamClient) {
 	delete(hub.clients, client)
 	hub.mu.Unlock()
 	client.stop()
+}
+
+func (hub *streamHub) closeSession(id string) {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	for client := range hub.clients {
+		if id == "" || client.sessionID == id {
+			delete(hub.clients, client)
+			client.stop()
+		}
+	}
 }
 
 func (hub *streamHub) broadcast(message []byte) {
@@ -230,17 +242,23 @@ func (s *Server) publicRobotWithSamples(record RobotRecord, includeSamples bool)
 		Remark: record.Remark, Online: time.Since(record.LastSeen) <= onlineAfter,
 		LastSeen: record.LastSeen, CollectedAt: collectedAt, Summary: summary,
 	}
-	if includeSamples && telemetry.Motors != nil && len(telemetry.Motors.Samples) > 0 {
-		robot.MotorSamples = telemetry.Motors.Samples
-		robot.MotorSampleRateHz = telemetry.Motors.SampleRateHz
+	if telemetry.Motors != nil {
+		if includeSamples {
+			robot.MotorSamples = telemetry.Motors.Samples
+			robot.MotorSampleRateHz = telemetry.Motors.SampleRateHz
+		}
 		for _, motor := range telemetry.Motors.Motors {
-			if motor.ID == "" || motor.Label == "" {
+			if motor.ID == "" {
 				continue
 			}
 			if robot.MotorLabels == nil {
 				robot.MotorLabels = make(map[string]string)
 			}
-			robot.MotorLabels[motor.ID] = motor.Label
+			label := motor.Label
+			if label == "" {
+				label = motor.ID
+			}
+			robot.MotorLabels[motor.ID] = label
 		}
 	}
 	return robot
@@ -273,7 +291,7 @@ func (s *Server) publicRobotEvent(record RobotRecord) []byte {
 }
 
 func (s *Server) publicRobotEventForOptions(record RobotRecord, options *publicStreamOptions) []byte {
-	includeSamples := options == nil || (options.includeSamples && options.robotID == publicRobotID(s.config.JWTSecret, record.UUID))
+	includeSamples := options != nil && options.includeSamples && options.robotID == publicRobotID(s.config.JWTSecret, record.UUID)
 	robot := s.publicRobotWithSamples(record, includeSamples)
 	if includeSamples && options != nil && len(options.motorIDs) > 0 {
 		filterPublicMotorSamples(&robot, options.motorIDs)
@@ -286,9 +304,9 @@ func filterPublicMotorSamples(robot *PublicRobot, motorIDs map[string]struct{}) 
 	if len(robot.MotorSamples) == 0 {
 		return
 	}
-	filtered := robot.MotorSamples[:0]
+	filtered := make([]model.MotorSample, 0, len(robot.MotorSamples))
 	for _, sample := range robot.MotorSamples {
-		motors := sample.Motors[:0]
+		motors := make([]model.MotorSampleState, 0, len(motorIDs))
 		for _, motor := range sample.Motors {
 			if _, ok := motorIDs[motor.ID]; ok {
 				motors = append(motors, motor)
@@ -347,6 +365,23 @@ func (s *Server) serveRobotStream(writer http.ResponseWriter, request *http.Requ
 		snapshot = s.adminSnapshotEvent()
 	}
 	client := &streamClient{conn: connection, send: make(chan []byte, streamQueueSize), done: make(chan struct{})}
+	var expires <-chan time.Time
+	if admin {
+		cookie, err := request.Cookie("baize_session")
+		if err != nil {
+			client.stop()
+			return
+		}
+		claims, valid := s.parseSessionToken(cookie.Value)
+		if !valid {
+			client.stop()
+			return
+		}
+		client.sessionID = claims.ID
+		timer := time.NewTimer(time.Until(time.Unix(claims.ExpiresAt, 0)))
+		defer timer.Stop()
+		expires = timer.C
+	}
 	if !admin {
 		options, ok := parsePublicStreamOptions(request)
 		if !ok {
@@ -363,6 +398,9 @@ func (s *Server) serveRobotStream(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	defer hub.remove(client)
+	if admin && !s.validSession(request) {
+		return
+	}
 
 	connection.SetReadLimit(4096)
 	_ = connection.SetReadDeadline(time.Now().Add(streamReadWait))
@@ -384,6 +422,9 @@ func (s *Server) serveRobotStream(writer http.ResponseWriter, request *http.Requ
 	for {
 		select {
 		case message := <-client.send:
+			if admin && !s.validSession(request) {
+				return
+			}
 			_ = connection.SetWriteDeadline(time.Now().Add(streamWriteWait))
 			if err := connection.WriteMessage(websocket.TextMessage, message); err != nil {
 				return
@@ -395,6 +436,8 @@ func (s *Server) serveRobotStream(writer http.ResponseWriter, request *http.Requ
 		case <-readDone:
 			return
 		case <-client.done:
+			return
+		case <-expires:
 			return
 		}
 	}

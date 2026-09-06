@@ -16,8 +16,9 @@ import (
 
 type Duration time.Duration
 
-func (d Duration) Value() time.Duration { return time.Duration(d) }
-func (d Duration) String() string       { return time.Duration(d).String() }
+func (d Duration) Value() time.Duration      { return time.Duration(d) }
+func (d Duration) String() string            { return time.Duration(d).String() }
+func (d Duration) MarshalYAML() (any, error) { return d.String(), nil }
 
 func (d *Duration) UnmarshalJSON(data []byte) error {
 	var value string
@@ -110,19 +111,25 @@ type BMSConfig struct {
 
 type UpdateConfig struct {
 	Enabled       bool     `json:"enabled" yaml:"enabled"`
-	Automatic     bool     `json:"automatic" yaml:"automatic"`
 	CheckInterval Duration `json:"check_interval" yaml:"check_interval"`
+}
+
+type fileUpdateConfig struct {
+	Enabled       bool     `yaml:"enabled"`
+	CheckInterval Duration `yaml:"check_interval"`
+	// Accepted only so existing installations can read their old configuration.
+	Automatic *bool `yaml:"automatic,omitempty"`
 }
 
 // fileConfig deliberately excludes motor and BMS sections. Robot capability is
 // selected by the single top-level model field and compiled into the Agent
 // release from the shared robot model catalogue.
 type fileConfig struct {
-	Model  string          `yaml:"model"`
-	Agent  fileAgentConfig `yaml:"agent"`
-	System *SystemConfig   `yaml:"system"`
-	GPU    *GPUConfig      `yaml:"gpu"`
-	Update *UpdateConfig   `yaml:"update"`
+	Model  string            `yaml:"model"`
+	Agent  fileAgentConfig   `yaml:"agent"`
+	System *SystemConfig     `yaml:"system"`
+	GPU    *GPUConfig        `yaml:"gpu"`
+	Update *fileUpdateConfig `yaml:"update"`
 }
 
 type fileAgentConfig struct {
@@ -167,7 +174,6 @@ func Default() Config {
 		},
 		Update: UpdateConfig{
 			Enabled:       true,
-			Automatic:     true,
 			CheckInterval: Duration(time.Minute),
 		},
 	}
@@ -216,9 +222,20 @@ func Load(path string) (Config, error) {
 		cfg.GPU = *file.GPU
 	}
 	if file.Update != nil {
-		cfg.Update = *file.Update
+		cfg.Update = UpdateConfig{Enabled: file.Update.Enabled, CheckInterval: file.Update.CheckInterval}
 	}
 	return build(cfg)
+}
+
+func Marshal(cfg Config) ([]byte, error) {
+	return yaml.Marshal(fileConfig{
+		Model: cfg.Agent.RobotModel,
+		Agent: fileAgentConfig{UUID: cfg.Agent.UUID, RobotCode: cfg.Agent.RobotCode,
+			DashboardURL: cfg.Agent.DashboardURL, Token: cfg.Agent.Token,
+			ReportInterval: cfg.Agent.ReportInterval, HTTPTimeout: cfg.Agent.HTTPTimeout},
+		System: &cfg.System, GPU: &cfg.GPU,
+		Update: &fileUpdateConfig{Enabled: cfg.Update.Enabled, CheckInterval: cfg.Update.CheckInterval},
+	})
 }
 
 func build(cfg Config) (Config, error) {

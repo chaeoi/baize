@@ -34,18 +34,17 @@ type Release struct {
 }
 
 type RobotRecord struct {
-	UUID           string          `json:"uuid"`
-	Code           string          `json:"code"`
-	Model          string          `json:"model"`
-	Hostname       string          `json:"hostname"`
-	OS             string          `json:"os"`
-	Arch           string          `json:"arch"`
-	AgentVersion   string          `json:"agent_version"`
-	Remark         string          `json:"remark"`
-	DesiredVersion string          `json:"desired_version,omitempty"`
-	FirstSeen      time.Time       `json:"first_seen"`
-	LastSeen       time.Time       `json:"last_seen"`
-	Telemetry      model.Telemetry `json:"telemetry"`
+	UUID         string          `json:"uuid"`
+	Code         string          `json:"code"`
+	Model        string          `json:"model"`
+	Hostname     string          `json:"hostname"`
+	OS           string          `json:"os"`
+	Arch         string          `json:"arch"`
+	AgentVersion string          `json:"agent_version"`
+	Remark       string          `json:"remark"`
+	FirstSeen    time.Time       `json:"first_seen"`
+	LastSeen     time.Time       `json:"last_seen"`
+	Telemetry    model.Telemetry `json:"telemetry"`
 }
 
 type StoreOptions struct {
@@ -242,11 +241,6 @@ func (s *Store) importLegacyState() error {
 			return err
 		}
 	}
-	for uuid, desired := range legacy.Desired {
-		if _, err := tx.Exec(`INSERT INTO robot_settings(uuid, desired_version) VALUES(?, ?) ON CONFLICT(uuid) DO UPDATE SET desired_version=excluded.desired_version`, uuid, desired); err != nil {
-			return err
-		}
-	}
 	for id, release := range legacy.Releases {
 		if !safeReleaseID(id) {
 			continue
@@ -363,7 +357,7 @@ func (s *Store) Secret(key string, size int) (string, bool, error) {
 }
 
 func (s *Store) loadRobots() error {
-	rows, err := s.control.Query(`SELECT r.uuid, r.code, r.model, r.hostname, r.os, r.arch, r.agent_version, COALESCE(s.remark, ''), COALESCE(s.desired_version, ''), r.first_seen, r.last_seen FROM robots r LEFT JOIN robot_settings s ON s.uuid = r.uuid`)
+	rows, err := s.control.Query(`SELECT r.uuid, r.code, r.model, r.hostname, r.os, r.arch, r.agent_version, COALESCE(s.remark, ''), r.first_seen, r.last_seen FROM robots r LEFT JOIN robot_settings s ON s.uuid = r.uuid`)
 	if err != nil {
 		return err
 	}
@@ -371,7 +365,7 @@ func (s *Store) loadRobots() error {
 	for rows.Next() {
 		var record RobotRecord
 		var firstSeen, lastSeen int64
-		if err := rows.Scan(&record.UUID, &record.Code, &record.Model, &record.Hostname, &record.OS, &record.Arch, &record.AgentVersion, &record.Remark, &record.DesiredVersion, &firstSeen, &lastSeen); err != nil {
+		if err := rows.Scan(&record.UUID, &record.Code, &record.Model, &record.Hostname, &record.OS, &record.Arch, &record.AgentVersion, &record.Remark, &firstSeen, &lastSeen); err != nil {
 			return err
 		}
 		record.FirstSeen = unixNano(firstSeen)
@@ -487,13 +481,16 @@ func (s *Store) PutTelemetry(telemetry model.Telemetry) error {
 	if err != nil {
 		return err
 	}
-	remark, desired, err := s.robotSettings(identity.UUID)
+	remark, err := s.robotSettings(identity.UUID)
 	if err != nil {
 		return err
 	}
-	record := RobotRecord{UUID: identity.UUID, Code: identity.Code, Model: identity.Model, Hostname: identity.Hostname, OS: identity.OS, Arch: identity.Arch, AgentVersion: telemetry.AgentVersion, Remark: remark, DesiredVersion: desired, LastSeen: now, Telemetry: telemetry}
+	record := RobotRecord{UUID: identity.UUID, Code: identity.Code, Model: identity.Model, Hostname: identity.Hostname, OS: identity.OS, Arch: identity.Arch, AgentVersion: telemetry.AgentVersion, Remark: remark, LastSeen: now, Telemetry: telemetry}
 	if previous, ok := s.robots[identity.UUID]; ok {
 		record.FirstSeen = previous.FirstSeen
+		if telemetry.CollectedAt.Before(previous.Telemetry.CollectedAt) {
+			record.Telemetry = previous.Telemetry
+		}
 	} else {
 		record.FirstSeen = now
 	}
@@ -507,13 +504,13 @@ func (s *Store) PutTelemetry(telemetry model.Telemetry) error {
 	return nil
 }
 
-func (s *Store) robotSettings(uuid string) (string, string, error) {
-	var remark, desired string
-	err := s.control.QueryRow(`SELECT remark, desired_version FROM robot_settings WHERE uuid = ?`, uuid).Scan(&remark, &desired)
+func (s *Store) robotSettings(uuid string) (string, error) {
+	var remark string
+	err := s.control.QueryRow(`SELECT remark FROM robot_settings WHERE uuid = ?`, uuid).Scan(&remark)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", nil
+		return "", nil
 	}
-	return remark, desired, err
+	return remark, err
 }
 
 func (s *Store) Robots() []RobotRecord {
@@ -569,20 +566,6 @@ func (s *Store) SetRemark(uuid, remark string) error {
 	return nil
 }
 
-func (s *Store) SetDesired(uuid, version string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.control.Exec(`INSERT INTO robot_settings(uuid, desired_version) VALUES(?, ?) ON CONFLICT(uuid) DO UPDATE SET desired_version=excluded.desired_version`, uuid, version)
-	if err != nil {
-		return err
-	}
-	if robot, ok := s.robots[uuid]; ok {
-		robot.DesiredVersion = version
-		s.robots[uuid] = robot
-	}
-	return nil
-}
-
 func (s *Store) RemoveRobot(uuid string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -616,13 +599,6 @@ func (s *Store) DeleteRelease(id string) error {
 	release, ok := s.releaseByIDLocked(id)
 	if !ok {
 		return os.ErrNotExist
-	}
-	var assigned int
-	if err := s.control.QueryRow(`SELECT COUNT(*) FROM robot_settings s JOIN robots r ON r.uuid = s.uuid WHERE s.desired_version = ? AND r.os = ? AND r.arch = ?`, release.Version, release.OS, release.Arch).Scan(&assigned); err != nil {
-		return err
-	}
-	if assigned > 0 {
-		return errors.New("release is assigned to a robot")
 	}
 	if err := os.Remove(release.Filename); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -683,21 +659,9 @@ func (s *Store) releaseByIDLocked(id string) (Release, bool) {
 	return release, true
 }
 
-func (s *Store) FindUpdate(uuid, current, goos, arch string, automatic bool) (Release, bool) {
+func (s *Store) FindUpdate(current, goos, arch string) (Release, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var desired string
-	_ = s.control.QueryRow(`SELECT desired_version FROM robot_settings WHERE uuid = ?`, uuid).Scan(&desired)
-	if desired != "" && desired != current {
-		for _, release := range s.releasesLocked() {
-			if release.Version == desired && release.OS == goos && release.Arch == arch {
-				return release, true
-			}
-		}
-	}
-	if !automatic {
-		return Release{}, false
-	}
 	var best Release
 	found := false
 	for _, release := range s.releasesLocked() {
@@ -712,14 +676,16 @@ func (s *Store) FindUpdate(uuid, current, goos, arch string, automatic bool) (Re
 }
 
 func (s *Store) insertHistory(uuid string, telemetry model.Telemetry, receivedAt time.Time) error {
-	if previous, ok := s.lastHistory[uuid]; ok && receivedAt.Sub(previous) < s.historyEvery {
+	point := makeHistoryPoint(telemetry)
+	if previous, ok := s.lastHistory[uuid]; ok && !point.At.Before(previous) && point.At.Sub(previous) < s.historyEvery {
 		return nil
 	}
-	point := makeHistoryPoint(telemetry)
 	if err := s.tsdb.WriteHost(uuid, point); err != nil {
 		return err
 	}
-	s.lastHistory[uuid] = receivedAt
+	if point.At.After(s.lastHistory[uuid]) {
+		s.lastHistory[uuid] = point.At
+	}
 	return nil
 }
 
@@ -775,30 +741,39 @@ func makeHistoryPoint(telemetry model.Telemetry) HistoryPoint {
 }
 
 func (s *Store) History(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if limit <= 0 || limit > historyPointLimit {
 		limit = 1440
 	}
 	return s.tsdb.History(uuid, from, to, limit)
 }
 
+func (s *Store) HostHistory(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
+	if limit <= 0 || limit > historyPointLimit {
+		limit = 1440
+	}
+	return s.tsdb.hostHistory(uuid, from, to, limit, false)
+}
+
 func (s *Store) FastMotorHistory(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	return s.fastMotorHistory(uuid, from, to, limit, "")
+}
+
+func (s *Store) fastMotorHistory(uuid string, from, to time.Time, limit int, motorID string) ([]HistoryPoint, error) {
 	if limit <= 0 || limit > 64_000 {
 		limit = 32_000
 	}
-	points, err := s.tsdb.FastMotorHistory(uuid, from, to, limit)
+	points, err := s.tsdb.fastMotorHistory(uuid, from, to, limit, motorID)
 	if err != nil {
 		return nil, err
 	}
 	labels := make(map[string]string)
+	s.mu.RLock()
 	if record, ok := s.robots[uuid]; ok && record.Telemetry.Motors != nil {
 		for _, motor := range record.Telemetry.Motors.Motors {
 			labels[motor.ID] = motor.Label
 		}
 	}
+	s.mu.RUnlock()
 	for pointIndex := range points {
 		for motorIndex := range points[pointIndex].Motors {
 			if label := labels[points[pointIndex].Motors[motorIndex].ID]; label != "" {
@@ -810,24 +785,7 @@ func (s *Store) FastMotorHistory(uuid string, from, to time.Time, limit int) ([]
 }
 
 func (s *Store) FastMotorHistoryFiltered(uuid string, from, to time.Time, limit int, motorID string) ([]HistoryPoint, error) {
-	points, err := s.FastMotorHistory(uuid, from, to, limit)
-	if err != nil || motorID == "" {
-		return points, err
-	}
-	filtered := points[:0]
-	for _, point := range points {
-		motors := point.Motors[:0]
-		for _, motor := range point.Motors {
-			if motor.ID == motorID {
-				motors = append(motors, motor)
-			}
-		}
-		if len(motors) > 0 {
-			point.Motors = motors
-			filtered = append(filtered, point)
-		}
-	}
-	return filtered, nil
+	return s.fastMotorHistory(uuid, from, to, limit, motorID)
 }
 
 func (s *Store) AuthenticateAdmin(username, password string) (bool, bool, error) {

@@ -27,6 +27,41 @@ func TestParseInstallOptions(t *testing.T) {
 	}
 }
 
+func TestPartialInstallPreservesGenericSettings(t *testing.T) {
+	original := installedConfig
+	installedConfig = filepath.Join(t.TempDir(), "config.yml")
+	t.Cleanup(func() { installedConfig = original })
+	cfg := config.Default()
+	cfg.Agent = config.AgentConfig{UUID: "52446a60-7483-4ba7-b8c7-b85f60b2a00f", RobotCode: "M99", RobotModel: "2m_v0.1.2", DashboardURL: "https://example.test", Token: "long-enough-test-token", ReportInterval: config.Duration(3 * time.Second), HTTPTimeout: config.Duration(9 * time.Second)}
+	cfg.System.Enabled = false
+	cfg.System.DiskPaths = []string{"/", "/data"}
+	cfg.GPU.Enabled = false
+	cfg.GPU.Command = "/usr/local/bin/custom-smi"
+	cfg.Update.Enabled = false
+	cfg.Update.CheckInterval = config.Duration(5 * time.Minute)
+	content, err := config.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installedConfig, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planConfig(installOptions{robotCode: "M100"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(installedConfig, plan.content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.Load(installedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent.RobotCode != "M100" || got.Agent.UUID != cfg.Agent.UUID || got.System.Enabled || got.GPU.Enabled || got.Update.Enabled || got.GPU.Command != cfg.GPU.Command || got.Update.CheckInterval != cfg.Update.CheckInterval || strings.Join(got.System.DiskPaths, ",") != "/,/data" {
+		t.Fatalf("unrelated settings changed: %+v", got)
+	}
+}
+
 func TestInstallOptionsValidatePartialValues(t *testing.T) {
 	partial := installOptions{uuid: "7fd34256-bf3a-4cf6-8da0-fbce40f34d11"}
 	if err := partial.validateProvided(); err != nil {
@@ -154,7 +189,7 @@ func TestDefaultConfigIsGeneratedButIntentionallyInvalid(t *testing.T) {
 
 func TestServiceUnitRunsInstalledBinaryWithConfig(t *testing.T) {
 	unit := serviceUnit()
-	expected := "ExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml"
+	expected := "ExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml"
 	if !strings.Contains(unit, expected) || !strings.Contains(unit, "User=ubuntu") || !strings.Contains(unit, "StateDirectory=baize-agent") || !strings.Contains(unit, "NoNewPrivileges=true") {
 		t.Fatalf("unexpected service unit: %s", unit)
 	}

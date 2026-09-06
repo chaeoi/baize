@@ -104,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/inst
 ```
 
 下载脚本只负责选择架构、校验 Release，然后把安装参数传给
-`baize-agent service install`。指定 Release 可设置 `BAIZE_VERSION=v1.2.3`。
+`baize-agent service install`。Agent 只会自动检查并升级到更新的兼容版本。
 未传 `--uuid` 时 Agent 生成永久 UUID；也支持 `--force-config`。安装参数只用于写入 `config.yml`，不会成为第二个
 运行时配置来源；已有有效配置默认保留，传入某个参数时只更新对应字段。`--force-config`
 用于从默认模板重新生成配置。可用以下命令查看状态或卸载服务；卸载保留二进制和配置，
