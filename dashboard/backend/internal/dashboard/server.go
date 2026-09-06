@@ -30,6 +30,7 @@ import (
 	"time"
 	"unicode"
 
+	"baize/shared/agentbinary"
 	"baize/shared/model"
 )
 
@@ -175,6 +176,7 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 				s.mu.Lock()
 				delete(s.sessions, claims.ID)
 				s.mu.Unlock()
+				s.adminStream.closeSession(claims.ID)
 			}
 		}
 		http.SetCookie(writer, &http.Cookie{Name: "baize_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secureCookie(request), SameSite: http.SameSiteStrictMode})
@@ -215,6 +217,7 @@ func (s *Server) changePassword(writer http.ResponseWriter, request *http.Reques
 	s.mu.Lock()
 	s.sessions = make(map[string]time.Time)
 	s.mu.Unlock()
+	s.adminStream.closeSession("")
 	if err := s.startSession(writer, request); err != nil {
 		writeError(writer, http.StatusInternalServerError, "renew session")
 		return
@@ -264,10 +267,7 @@ func (s *Server) telemetry(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusInternalServerError, "store telemetry")
 		return
 	}
-	if robot, ok := s.store.Robot(telemetry.Robot.UUID); ok {
-		s.publicStream.broadcast(s.publicRobotEvent(robot))
-		s.adminStream.broadcast(s.adminRobotEvent(robot))
-	}
+	s.broadcastRobot(telemetry.Robot.UUID)
 	writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -283,7 +283,7 @@ func (s *Server) updateCheck(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusBadRequest, "invalid update query")
 		return
 	}
-	release, found := s.store.FindUpdate(uuid, current, goos, arch, query.Get("automatic") == "1")
+	release, found := s.store.FindUpdate(current, goos, arch)
 	if !found {
 		writeJSON(writer, http.StatusOK, map[string]bool{"available": false})
 		return
@@ -358,7 +358,7 @@ func (s *Server) publicRobotAction(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	scope := request.URL.Query().Get("scope")
-	if scope != "" && scope != "motors" {
+	if scope != "" && scope != "host" && scope != "motors" {
 		writeError(writer, http.StatusBadRequest, "history scope must be host or motors")
 		return
 	}
@@ -394,7 +394,11 @@ func (s *Server) publicRobotAction(writer http.ResponseWriter, request *http.Req
 		if !valid {
 			return
 		}
-		points, err = s.store.History(uuid, from, to, limit)
+		if scope == "host" {
+			points, err = s.store.HostHistory(uuid, from, to, limit)
+		} else {
+			points, err = s.store.History(uuid, from, to, limit)
+		}
 	}
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, "read telemetry history")
@@ -478,52 +482,6 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 		}
 		s.broadcastRobot(uuid)
 		writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
-	case "update":
-		robot, ok := s.store.Robot(uuid)
-		if !ok {
-			writeError(writer, http.StatusNotFound, "robot not found")
-			return
-		}
-		if request.Method == http.MethodDelete {
-			if err := s.store.SetDesired(uuid, ""); err != nil {
-				writeError(writer, http.StatusInternalServerError, err.Error())
-				return
-			}
-			s.broadcastRobot(uuid)
-			writer.WriteHeader(http.StatusNoContent)
-			return
-		}
-		if request.Method != http.MethodPost {
-			methodNotAllowed(writer)
-			return
-		}
-		var body struct {
-			Version string `json:"version"`
-		}
-		if err := decodeJSON(writer, request, &body, 2048); err != nil {
-			return
-		}
-		if !versionPattern.MatchString(body.Version) {
-			writeError(writer, http.StatusBadRequest, "invalid version")
-			return
-		}
-		compatible := false
-		for _, release := range s.store.Releases() {
-			if release.Version == body.Version && release.OS == robot.OS && release.Arch == robot.Arch {
-				compatible = true
-				break
-			}
-		}
-		if !compatible {
-			writeError(writer, http.StatusConflict, "no compatible release exists for this robot")
-			return
-		}
-		if err := s.store.SetDesired(uuid, body.Version); err != nil {
-			writeError(writer, http.StatusInternalServerError, err.Error())
-			return
-		}
-		s.broadcastRobot(uuid)
-		writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
 	case "history":
 		if request.Method != http.MethodGet {
 			methodNotAllowed(writer)
@@ -534,7 +492,7 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 			return
 		}
 		scope := request.URL.Query().Get("scope")
-		if scope != "" && scope != "motors" {
+		if scope != "" && scope != "host" && scope != "motors" {
 			writeError(writer, http.StatusBadRequest, "history scope must be host or motors")
 			return
 		}
@@ -570,7 +528,11 @@ func (s *Server) robotAction(writer http.ResponseWriter, request *http.Request) 
 			if !valid {
 				return
 			}
-			points, err = s.store.History(uuid, from, to, limit)
+			if scope == "host" {
+				points, err = s.store.HostHistory(uuid, from, to, limit)
+			} else {
+				points, err = s.store.History(uuid, from, to, limit)
+			}
 		}
 		if err != nil {
 			writeError(writer, http.StatusInternalServerError, "read telemetry history")
@@ -681,6 +643,7 @@ func (s *Server) uploadRelease(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusBadRequest, "invalid or oversized upload")
 		return
 	}
+	defer request.MultipartForm.RemoveAll()
 	version, goos, arch := request.FormValue("version"), request.FormValue("os"), request.FormValue("arch")
 	if !versionPattern.MatchString(version) || !platformPattern.MatchString(goos) || !platformPattern.MatchString(arch) {
 		writeError(writer, http.StatusBadRequest, "invalid release metadata")
@@ -694,7 +657,7 @@ func (s *Server) uploadRelease(writer http.ResponseWriter, request *http.Request
 	defer file.Close()
 	release, err := s.saveReleaseFile(file, version, goos, arch)
 	if err != nil {
-		writeError(writer, http.StatusInternalServerError, err.Error())
+		writeError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := s.store.AddRelease(release); err != nil {
@@ -730,6 +693,9 @@ func (s *Server) saveReleaseFile(source multipart.File, version, goos, arch stri
 		return Release{}, err
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
+	if err := agentbinary.Validate(temporaryPath, goos, arch); err != nil {
+		return Release{}, err
+	}
 	id := fmt.Sprintf("%s-%s-%s-%s", goos, arch, sanitizeVersion(version), digest[:12])
 	destination := filepath.Join(s.store.dataDir, "releases", id)
 	if err := os.Rename(temporaryPath, destination); err != nil {

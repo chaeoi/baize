@@ -56,15 +56,12 @@ func (c *Client) Report(ctx context.Context, telemetry model.Telemetry) error {
 	return nil
 }
 
-func (c *Client) CheckUpdate(ctx context.Context, uuid, version, goos, arch string, automatic bool) (*model.UpdateInfo, error) {
+func (c *Client) CheckUpdate(ctx context.Context, uuid, version, goos, arch string) (*model.UpdateInfo, error) {
 	query := url.Values{}
 	query.Set("uuid", uuid)
 	query.Set("version", version)
 	query.Set("os", goos)
 	query.Set("arch", arch)
-	if automatic {
-		query.Set("automatic", "1")
-	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/update/check?"+query.Encode(), nil)
 	if err != nil {
 		return nil, err

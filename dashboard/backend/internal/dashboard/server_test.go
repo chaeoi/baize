@@ -180,7 +180,7 @@ func TestPublicRobotStreamStartsWithRedactedSnapshot(t *testing.T) {
 		Type  string       `json:"type"`
 		Robot *PublicRobot `json:"robot"`
 	}
-	if err := json.Unmarshal(server.publicRobotEvent(record), &liveEvent); err != nil {
+	if err := json.Unmarshal(server.publicRobotEventForOptions(record, &publicStreamOptions{includeSamples: true, robotID: server.publicRobot(record).ID}), &liveEvent); err != nil {
 		t.Fatal(err)
 	}
 	if liveEvent.Robot == nil || liveEvent.Robot.MotorSampleRateHz != 500 || len(liveEvent.Robot.MotorSamples) != 1 || liveEvent.Robot.MotorSamples[0].Motors[0].TorqueNm != 8.5 || liveEvent.Robot.MotorLabels["hip"] != "左髋" {

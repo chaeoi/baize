@@ -245,7 +245,7 @@ func TestLegacyStateAndReleaseAreMigratedIntoControlDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, ok := store.Robot(uuid)
-	if !ok || record.Remark != "legacy remark" || record.DesiredVersion != "20260814" {
+	if !ok || record.Remark != "legacy remark" {
 		t.Fatalf("legacy settings missing: %+v", record)
 	}
 	migrated, ok := store.ReleaseByID(release.ID)

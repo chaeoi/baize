@@ -36,6 +36,7 @@ type MotorCollector struct {
 	pendingCount int
 	recycled     []model.MotorSample
 	streamErr    error
+	lastReceived time.Time
 }
 
 var rosEnvironmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
@@ -104,8 +105,16 @@ func (c *MotorCollector) collectStream(ctx context.Context) (model.MotorSnapshot
 	snapshot := cloneMotorSnapshot(c.latest)
 	snapshot.Samples = c.takePendingSamplesLocked()
 	snapshot.SampleRateHz = c.config.FastSampleRateHz
+	err := c.streamErr
+	age := time.Since(c.lastReceived)
 	c.mu.Unlock()
-	return snapshot, nil
+	if age > wait || err != nil {
+		snapshot.TopicOnline = false
+		if err == nil {
+			err = fmt.Errorf("motor topic has not published for %s", age.Round(time.Second))
+		}
+	}
+	return snapshot, err
 }
 
 func (c *MotorCollector) emptySnapshot() model.MotorSnapshot {
@@ -168,6 +177,7 @@ func (c *MotorCollector) consumeMotorValues(names []string, positions, velocitie
 	c.latest.Topic = c.config.Topic
 	c.latest.TopicOnline = true
 	c.latest.SampledAt = now
+	c.lastReceived = time.Now()
 	c.latest.SampleRateHz = c.config.FastSampleRateHz
 	pendingIndex := c.appendPendingLocked(model.MotorSample{At: now})
 	compact := c.pending[pendingIndex].Motors

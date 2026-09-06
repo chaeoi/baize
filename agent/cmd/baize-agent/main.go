@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"syscall"
@@ -46,6 +47,10 @@ func main() {
 	showVersion := flags.Bool("version", false, "print version and exit")
 	checkConfig := flags.Bool("check-config", false, "validate configuration and built-in robot model, then exit")
 	arguments := os.Args[1:]
+	supervise := len(arguments) > 0 && arguments[0] == "supervise"
+	if supervise {
+		arguments = arguments[1:]
+	}
 	if len(arguments) > 0 && arguments[0] == "run" {
 		arguments = arguments[1:]
 	}
@@ -56,6 +61,15 @@ func main() {
 	}
 	if *showVersion {
 		fmt.Println(version)
+		return
+	}
+	if supervise {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		if err := agent.Supervise(ctx, "/opt/baize/agent/bin/baize-agent", *configPath); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("Agent supervisor stopped", "error", err)
+			os.Exit(1)
+		}
 		return
 	}
 	cfg, err := config.Load(*configPath)
@@ -76,15 +90,26 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Config) error {
+	managedSubscriber := os.Getenv("BAIZE_ROS2_SUBSCRIBER") == ""
 	ros2Subscriber, err := service.PrepareROS2Subscriber()
 	if err != nil {
 		slog.Warn("prepare ROS2 subscriber", "error", err)
 	} else if err := os.Setenv("BAIZE_ROS2_SUBSCRIBER", ros2Subscriber); err != nil {
 		return fmt.Errorf("configure ROS2 subscriber: %w", err)
 	}
+	if managedSubscriber {
+		_ = os.Setenv("BAIZE_MANAGED_SUBSCRIBER", "1")
+	}
 	hostname, _ := os.Hostname()
 	httpClient := &http.Client{Timeout: cfg.Agent.HTTPTimeout.Value()}
 	dashboardClient := agent.NewClient(cfg.Agent.DashboardURL, cfg.Agent.Token, httpClient)
+	var outbox *agent.Outbox
+	if directory := os.Getenv("STATE_DIRECTORY"); directory != "" {
+		outbox, err = agent.NewOutbox(filepath.Join(directory, "telemetry-outbox"))
+		if err != nil {
+			return fmt.Errorf("open telemetry outbox: %w", err)
+		}
+	}
 	systemCollector := collector.NewSystemCollector()
 	var motorCollector *collector.MotorCollector
 	if cfg.Motor.Enabled {
@@ -94,9 +119,6 @@ func run(ctx context.Context, cfg config.Config) error {
 	if cfg.BMS.Enabled {
 		bmsCollector = collector.NewBMSCollector(cfg.BMS)
 	}
-	if cfg.Update.Enabled && version != "dev" {
-		go updateLoop(ctx, cfg, dashboardClient)
-	}
 
 	identity := model.Robot{UUID: cfg.Agent.UUID, Code: cfg.Agent.RobotCode, Model: cfg.Agent.RobotModel, Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH}
 	reportInterval := cfg.Agent.ReportInterval.Value()
@@ -105,6 +127,7 @@ func run(ctx context.Context, cfg config.Config) error {
 	}
 	ticker := time.NewTicker(reportInterval)
 	defer ticker.Stop()
+	confirmed := false
 	for {
 		started := time.Now()
 		telemetry := collect(ctx, cfg, identity, systemCollector, motorCollector, bmsCollector)
@@ -112,10 +135,26 @@ func run(ctx context.Context, cfg config.Config) error {
 			telemetry.Errors = append(telemetry.Errors, model.ComponentError{Component: "telemetry", Message: fmt.Sprintf("normalized %d non-finite sensor values", count), At: time.Now().UTC()})
 		}
 		reportCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
-		err := dashboardClient.Report(reportCtx, telemetry)
+		var err error
+		if outbox != nil {
+			enqueueErr := outbox.Enqueue(telemetry)
+			err = errors.Join(enqueueErr, outbox.Flush(reportCtx, dashboardClient))
+		} else {
+			err = dashboardClient.Report(reportCtx, telemetry)
+		}
 		cancel()
 		if err != nil {
 			slog.Warn("report telemetry", "error", err)
+		}
+		if !confirmed {
+			if err := agent.ConfirmUpdate(); err != nil {
+				slog.Warn("confirm Agent startup", "error", err)
+			} else {
+				confirmed = true
+				if cfg.Update.Enabled && version != "dev" {
+					go updateLoop(ctx, cfg, dashboardClient)
+				}
+			}
 		}
 		slog.Debug("collection complete", "duration", time.Since(started))
 		select {
@@ -193,7 +232,7 @@ func updateLoop(ctx context.Context, cfg config.Config, client *agent.Client) {
 	check := func() {
 		checkCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
 		defer cancel()
-		update, err := client.CheckUpdate(checkCtx, cfg.Agent.UUID, version, runtime.GOOS, runtime.GOARCH, cfg.Update.Automatic)
+		update, err := client.CheckUpdate(checkCtx, cfg.Agent.UUID, version, runtime.GOOS, runtime.GOARCH)
 		if err != nil {
 			slog.Warn("check update", "error", err)
 			return

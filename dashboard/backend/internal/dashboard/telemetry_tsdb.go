@@ -204,6 +204,10 @@ func (db *telemetryTSDB) WriteMotorSamples(uuid string, samples []model.MotorSam
 }
 
 func (db *telemetryTSDB) History(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
+	return db.hostHistory(uuid, from, to, limit, true)
+}
+
+func (db *telemetryTSDB) hostHistory(uuid string, from, to time.Time, limit int, includeMotors bool) ([]HistoryPoint, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	if db.closed {
@@ -237,7 +241,7 @@ func (db *telemetryTSDB) History(uuid string, from, to time.Time, limit int) ([]
 		{metricHostDiagnosticCount, func(point *HistoryPoint, value float64) { point.DiagnosticCount = int(value) }},
 	}
 	for _, binding := range bindings {
-		values, err := readMetric(db.host, binding.metric, uuid, from, to, false)
+		values, err := readMetric(db.host, binding.metric, uuid, from, to, false, "", limit == 1)
 		if err != nil {
 			return nil, err
 		}
@@ -250,6 +254,9 @@ func (db *telemetryTSDB) History(uuid string, from, to time.Time, limit int) ([]
 			binding.set(point, value.value)
 		}
 	}
+	if !includeMotors {
+		return orderedHistoryPoints(points, limit), nil
+	}
 	type motorBinding struct {
 		metric string
 		set    func(*MotorHistoryPoint, float64)
@@ -260,7 +267,7 @@ func (db *telemetryTSDB) History(uuid string, from, to time.Time, limit int) ([]
 		{metricHostMotorTorque, func(point *MotorHistoryPoint, value float64) { point.TorqueNm = value }},
 	}
 	for _, binding := range motorBindings {
-		values, err := readMetric(db.host, binding.metric, uuid, from, to, true)
+		values, err := readMetric(db.host, binding.metric, uuid, from, to, true, "", limit == 1)
 		if err != nil {
 			return nil, err
 		}
@@ -300,6 +307,10 @@ func (db *telemetryTSDB) History(uuid string, from, to time.Time, limit int) ([]
 }
 
 func (db *telemetryTSDB) FastMotorHistory(uuid string, from, to time.Time, limit int) ([]HistoryPoint, error) {
+	return db.fastMotorHistory(uuid, from, to, limit, "")
+}
+
+func (db *telemetryTSDB) fastMotorHistory(uuid string, from, to time.Time, limit int, motorID string) ([]HistoryPoint, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	if db.closed {
@@ -317,7 +328,7 @@ func (db *telemetryTSDB) FastMotorHistory(uuid string, from, to time.Time, limit
 		{metricMotorTorque, func(point *MotorHistoryPoint, value float64) { point.TorqueNm = value }},
 	}
 	for _, binding := range bindings {
-		values, err := readMetric(db.motor, binding.metric, uuid, from, to, true)
+		values, err := readMetric(db.motor, binding.metric, uuid, from, to, true, motorID, false)
 		if err != nil {
 			return nil, err
 		}
@@ -364,7 +375,7 @@ type metricValue struct {
 	motorID   string
 }
 
-func readMetric(source *storage.Storage, metric, uuid string, from, to time.Time, includeMotorID bool) ([]metricValue, error) {
+func readMetric(source *storage.Storage, metric, uuid string, from, to time.Time, includeMotorID bool, motorFilter string, latestOnly bool) ([]metricValue, error) {
 	filters := storage.NewTagFilters()
 	if err := filters.Add(nil, []byte(metric), false, false); err != nil {
 		return nil, err
@@ -372,12 +383,18 @@ func readMetric(source *storage.Storage, metric, uuid string, from, to time.Time
 	if err := filters.Add([]byte("robot_uuid"), []byte(uuid), false, false); err != nil {
 		return nil, err
 	}
+	if motorFilter != "" {
+		if err := filters.Add([]byte("motor_id"), []byte(motorFilter), false, false); err != nil {
+			return nil, err
+		}
+	}
 	tr := storage.TimeRange{MinTimestamp: from.UnixMilli(), MaxTimestamp: to.UnixMilli()}
 	deadline := uint64(time.Now().Add(20 * time.Second).Unix())
 	var search storage.Search
 	search.Init(nil, source, []*storage.TagFilters{filters}, tr, 1_000, deadline)
 	defer search.MustClose()
 	var result []metricValue
+	latest := make(map[string]metricValue)
 	var timestamps []int64
 	var values []float64
 	for search.NextMetricBlock() {
@@ -400,11 +417,23 @@ func readMetric(source *storage.Storage, metric, uuid string, from, to time.Time
 		values = values[:0]
 		timestamps, values = block.AppendRowsWithTimeRangeFilter(timestamps, values, tr)
 		for index := range timestamps {
-			result = append(result, metricValue{timestamp: timestamps[index], value: values[index], motorID: motorID})
+			value := metricValue{timestamp: timestamps[index], value: values[index], motorID: motorID}
+			if latestOnly {
+				if previous, ok := latest[motorID]; !ok || value.timestamp > previous.timestamp {
+					latest[motorID] = value
+				}
+			} else {
+				result = append(result, value)
+			}
 		}
 	}
 	if err := search.Error(); err != nil {
 		return nil, err
+	}
+	if latestOnly {
+		for _, value := range latest {
+			result = append(result, value)
+		}
 	}
 	return result, nil
 }

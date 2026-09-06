@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -14,6 +15,33 @@ import (
 	"baize/agent/internal/config"
 	"baize/shared/model"
 )
+
+func TestMotorStreamExpiresAndReportsSubscriberFailure(t *testing.T) {
+	c := NewMotorCollector(config.MotorConfig{FastSampleRateHz: 500, FastBufferSeconds: 15, ReadTimeout: config.Duration(3 * time.Second)})
+	c.streamOnce.Do(func() {})
+	if err := c.consumeMotorValues([]string{"hip"}, []float64{1}, []float64{2}, []float64{3}, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// Fresh receipt must work even when a publisher uses a different clock.
+	if snapshot, err := c.Collect(t.Context()); err != nil || !snapshot.TopicOnline {
+		t.Fatalf("fresh receipt rejected: %+v %v", snapshot, err)
+	}
+	c.lastReceived = time.Now().Add(-time.Minute)
+	if snapshot, err := c.Collect(t.Context()); err == nil || snapshot.TopicOnline {
+		t.Fatalf("stale stream considered online: %+v %v", snapshot, err)
+	}
+	c.lastReceived = time.Now()
+	c.streamErr = errors.New("subscriber exited")
+	if snapshot, err := c.Collect(t.Context()); err == nil || snapshot.TopicOnline {
+		t.Fatalf("failed stream considered online: %+v %v", snapshot, err)
+	}
+	if err := c.consumeMotorValues([]string{"hip"}, []float64{4}, []float64{5}, []float64{6}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := c.Collect(t.Context()); err != nil || !snapshot.TopicOnline {
+		t.Fatalf("stream did not recover: %+v %v", snapshot, err)
+	}
+}
 
 func TestParseJointState(t *testing.T) {
 	data := []byte(`header:
