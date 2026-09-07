@@ -21,7 +21,9 @@ const state = {
   publicHistoryRobot: null,
   publicHistoryLoading: false,
   publicHistoryRequestID: 0,
+  publicHistoryController: null,
   publicHistoryMode: 'host',
+  publicHistoryRange: '1',
   publicHistoryMotor: '',
   publicHistoryMetric: 'torque_nm',
   publicHistoryDrawKey: '',
@@ -34,6 +36,8 @@ const state = {
 const PUBLIC_HOST_SAMPLE_RATE_HZ = 0.5;
 const PUBLIC_ALL_MOTOR_SAMPLE_RATE_HZ = 20;
 const PUBLIC_SINGLE_MOTOR_SAMPLE_RATE_HZ = 500;
+const PUBLIC_HISTORY_MODES = new Set(['host', 'motors', 'single']);
+const PUBLIC_HISTORY_METRICS = new Set(['torque_nm', 'velocity_rad_per_sec', 'position_rad']);
 let publicRecorder = null;
 let publicRecordingDatabasePromise = null;
 
@@ -60,7 +64,8 @@ async function boot() {
     return;
   }
   state.view = 'display';
-  state.selected = publicRobotIDFromLocation();
+  applyPublicRoute(publicRouteFromLocation());
+  replacePublicRoute();
   showApp();
   openStream('public');
 }
@@ -79,38 +84,24 @@ function bindEvents() {
   $('#delete-robot-button').addEventListener('click', openDeleteRobot);
   $('#delete-robot-form').addEventListener('submit', deleteRobot);
   $('#history-range').addEventListener('change', loadHistory);
-  $('#public-history-range').addEventListener('change', () => {
-    state.publicHistoryRequestID += 1;
-    state.publicHistoryLoading = false;
-    const robot = selectedPublicRobot();
-    state.publicHistory = [];
-    state.publicHistoryRobot = null;
-    state.publicHistoryDrawKey = '';
-    state.publicRealtimeStartedAt = 0;
-    state.publicRealtimeClockOffset = null;
-    if (!robot) return;
-    if (publicHistoryIsRealtime()) {
-      startPublicRealtime(robot);
-      renderPublicHistoryControls();
-      drawPublicHistory(state.publicHistory);
-    } else {
-      syncPublicStream();
-      loadPublicHistory(robot);
-    }
+  $('#public-history-range').addEventListener('change', (event) => {
+    const range = event.target.value;
+    if (!publicHistoryRangeOptions(state.publicHistoryMode).includes(range) || range === state.publicHistoryRange) return;
+    state.publicHistoryRange = range;
+    pushPublicRoute();
+    refreshPublicHistory();
   });
-  $('#public-metric-select').addEventListener('change', (event) => { state.publicHistoryMetric = event.target.value; state.publicHistoryDrawKey = ''; drawPublicHistory(state.publicHistory); });
-  $('#public-motor-select').addEventListener('change', (event) => {
-    state.publicHistoryRequestID += 1;
-    state.publicHistoryLoading = false;
-    state.publicHistoryMotor = event.target.value;
-    state.publicHistory = [];
-    state.publicHistoryRobot = null;
+  $('#public-metric-select').addEventListener('change', (event) => {
+    if (!PUBLIC_HISTORY_METRICS.has(event.target.value) || event.target.value === state.publicHistoryMetric) return;
+    state.publicHistoryMetric = event.target.value;
+    pushPublicRoute();
     state.publicHistoryDrawKey = '';
-    state.publicRealtimeStartedAt = 0;
-    state.publicRealtimeClockOffset = null;
-    const robot = selectedPublicRobot();
-    if (robot && publicHistoryIsRealtime()) startPublicRealtime(robot);
-    else if (robot) loadPublicHistory(robot);
+    drawPublicHistory(state.publicHistory);
+  });
+  $('#public-motor-select').addEventListener('change', (event) => {
+    state.publicHistoryMotor = event.target.value;
+    pushPublicRoute();
+    refreshPublicHistory();
   });
   $('#public-download-button').addEventListener('click', downloadPublicRecording);
   $('#public-record-button').addEventListener('click', togglePublicRecording);
@@ -415,7 +406,7 @@ function renderRobotList() {
     const online = isPublicOnline(robot);
     const remark = (robot.remark || '').trim();
     const metric = (label, value, sub, level) => `<div class="robot-card-metric"><span>${label}</span><strong>${value}</strong><div class="meter"><i class="${meterClass(level)}"></i></div><small>${sub}</small></div>`;
-    return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="/robot/${encodeURIComponent(robot.id)}">
+    return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="${escapeHTML(publicRouteURL(robot.id, defaultPublicHistoryRoute()))}">
       <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong>${remark ? `<small>${escapeHTML(remark)}</small>` : ''}</div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
       <div class="robot-card-meta"><time>${relativeTime(robot.last_seen)}</time></div>
       <div class="robot-card-metrics">
@@ -479,83 +470,156 @@ function publicRobotIDFromLocation() {
   try { return decodeURIComponent(match[1]); } catch { return null; }
 }
 
-function openPublicRobot(id) {
-  if (!id || state.selected === id) return;
-  stopPublicRecording();
-  openStream('public');
-  state.selected = id;
-  state.publicHistoryMotor = '';
+function defaultPublicHistoryRoute() {
+  return { mode: 'host', range: '1', motor: '', metric: 'torque_nm' };
+}
+
+function publicHistoryRangeOptions(mode) {
+  return mode === 'host' ? ['1', '6', '24', '168'] : ['60', 'realtime'];
+}
+
+function publicRouteFromLocation() {
+  const route = { id: publicRobotIDFromLocation(), ...defaultPublicHistoryRoute() };
+  if (!route.id) return route;
+  const query = new URLSearchParams(window.location.search);
+  const mode = query.get('view');
+  if (PUBLIC_HISTORY_MODES.has(mode)) route.mode = mode;
+  const range = query.get('range');
+  if (publicHistoryRangeOptions(route.mode).includes(range)) route.range = range;
+  else route.range = route.mode === 'host' ? '1' : '60';
+  const motor = query.get('motor') || '';
+  if (route.mode === 'single' && /^[A-Za-z0-9_.:-]{1,128}$/.test(motor)) route.motor = motor;
+  if (route.mode === 'motors' && PUBLIC_HISTORY_METRICS.has(query.get('metric'))) route.metric = query.get('metric');
+  return route;
+}
+
+function applyPublicRoute(route) {
+  state.selected = route.id;
+  state.publicHistoryMode = route.mode;
+  state.publicHistoryRange = route.range;
+  state.publicHistoryMotor = route.motor;
+  state.publicHistoryMetric = route.metric;
+}
+
+function currentPublicHistoryRoute() {
+  return { mode: state.publicHistoryMode, range: state.publicHistoryRange, motor: state.publicHistoryMotor, metric: state.publicHistoryMetric };
+}
+
+function publicRouteURL(id = state.selected, route = currentPublicHistoryRoute()) {
+  if (!id) return '/';
+  const query = new URLSearchParams({ view: route.mode, range: route.range });
+  if (route.mode === 'single' && route.motor) query.set('motor', route.motor);
+  if (route.mode === 'motors') query.set('metric', route.metric);
+  return `/robot/${encodeURIComponent(id)}?${query}`;
+}
+
+function updatePublicRoute(replace = false) {
+  const target = publicRouteURL();
+  if (`${window.location.pathname}${window.location.search}` === target) return;
+  window.history[replace ? 'replaceState' : 'pushState']({}, '', target);
+}
+
+function pushPublicRoute() { updatePublicRoute(false); }
+function replacePublicRoute() { updatePublicRoute(true); }
+
+function resetPublicHistory() {
+  state.publicHistoryController?.abort();
+  state.publicHistoryController = null;
+  state.publicHistoryRequestID += 1;
+  state.publicHistoryLoading = false;
   state.publicHistory = [];
   state.publicHistoryRobot = null;
   state.publicHistoryDrawKey = '';
   state.publicRealtimeStartedAt = 0;
   state.publicRealtimeClockOffset = null;
-  state.publicHistoryRequestID += 1;
-  state.publicHistoryLoading = false;
-  window.history.pushState({}, '', `/robot/${encodeURIComponent(id)}`);
+  $('#public-chart-grid').replaceChildren();
+}
+
+function refreshPublicHistory() {
+  resetPublicHistory();
+  const robot = selectedPublicRobot();
+  renderPublicHistoryControls();
+  syncPublicStream();
+  if (!robot) {
+    drawPublicHistory(state.publicHistory);
+    return;
+  }
+  if (publicHistoryIsRealtime()) {
+    startPublicRealtime(robot);
+    drawPublicHistory(state.publicHistory);
+  } else loadPublicHistory(robot);
+}
+
+function firstPublicMotorID() {
+  const labels = Object.keys(selectedPublicRobot()?.motor_labels || {});
+  if (labels.length) return labels[0];
+  return motorDescriptors(state.publicHistory)[0]?.id || '';
+}
+
+function openPublicRobot(id) {
+  if (!id || state.selected === id) return;
+  stopPublicRecording();
+  applyPublicRoute({ id, ...defaultPublicHistoryRoute() });
+  resetPublicHistory();
+  pushPublicRoute();
+  syncPublicStream();
   render();
 }
 
 function showFleet(replace = false) {
   stopPublicRecording();
-  openStream('public');
-  state.selected = null;
-  state.publicHistoryMotor = '';
-  state.publicHistory = [];
-  state.publicHistoryRobot = null;
-  state.publicHistoryDrawKey = '';
-  state.publicRealtimeStartedAt = 0;
-  state.publicRealtimeClockOffset = null;
-  state.publicHistoryRequestID += 1;
-  state.publicHistoryLoading = false;
-  if (replace) window.history.replaceState({}, '', '/');
-  else window.history.pushState({}, '', '/');
+  applyPublicRoute({ id: null, ...defaultPublicHistoryRoute() });
+  resetPublicHistory();
+  updatePublicRoute(replace);
+  syncPublicStream();
   render();
 }
 
 function syncPublicRoute() {
   if (state.view !== 'display') return;
-  const id = publicRobotIDFromLocation();
-  if (id !== state.selected) {
+  const route = publicRouteFromLocation();
+  const robotChanged = route.id !== state.selected;
+  const dataChanged = route.mode !== state.publicHistoryMode
+    || route.range !== state.publicHistoryRange
+    || route.motor !== state.publicHistoryMotor;
+  const metricChanged = route.metric !== state.publicHistoryMetric;
+  if (robotChanged) {
     stopPublicRecording();
-    openStream('public');
-    state.selected = id;
-    state.publicHistoryMotor = '';
-    state.publicHistory = [];
-    state.publicHistoryRobot = null;
-    state.publicHistoryDrawKey = '';
-    state.publicRealtimeStartedAt = 0;
-    state.publicRealtimeClockOffset = null;
-    state.publicHistoryRequestID += 1;
-    state.publicHistoryLoading = false;
   }
+  if (robotChanged || dataChanged) resetPublicHistory();
+  applyPublicRoute(route);
+  replacePublicRoute();
+  if (metricChanged) state.publicHistoryDrawKey = '';
   render();
+  syncPublicStream();
 }
 
 function renderPublicHistoryControls() {
   const range = $('#public-history-range');
   const rangeScope = state.publicHistoryMode === 'motors' ? 'all-motors' : state.publicHistoryMode === 'single' ? 'single-motor' : 'host';
-  const rangeOptions = state.publicHistoryMode === 'motors'
-    ? [['60', '最近 1 分钟'], ['realtime', '实时']]
-    : state.publicHistoryMode === 'single'
-      ? [['60', '最近 1 分钟'], ['realtime', '实时']]
-    : [['1', '1 小时'], ['6', '6 小时'], ['24', '1 天'], ['168', '7 天']];
+  const rangeOptions = state.publicHistoryMode === 'host'
+    ? [['1', '1 小时'], ['6', '6 小时'], ['24', '1 天'], ['168', '7 天']]
+    : [['60', '最近 1 分钟'], ['realtime', '实时']];
   if (range.dataset.scope !== rangeScope) {
     range.innerHTML = rangeOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
-    range.value = state.publicHistoryMode === 'host' ? '1' : '60';
     range.dataset.scope = rangeScope;
   }
-  const motors = new Map(Object.entries(selectedPublicRobot()?.motor_labels || {}));
+  range.value = state.publicHistoryRange;
+  const motors = new Set(Object.keys(selectedPublicRobot()?.motor_labels || {}));
   for (const descriptor of motorDescriptors(state.publicHistory)) {
-    if (!motors.has(descriptor.id)) motors.set(descriptor.id, descriptor.label);
+    motors.add(descriptor.id);
   }
   const motorSelect = $('#public-motor-select');
   const current = state.publicHistoryMotor;
-  const motorOptions = [...motors.entries()].map(([id, label]) => `<option value="${escapeHTML(id)}">${escapeHTML(label)}</option>`).join('');
+  const motorOptions = [...motors].map((id) => `<option value="${escapeHTML(id)}">${escapeHTML(id)}</option>`).join('');
   if (motorSelect.innerHTML !== motorOptions) motorSelect.innerHTML = motorOptions;
-  if (motors.size && (!current || !motors.has(current))) state.publicHistoryMotor = motors.keys().next().value;
+  if (state.publicHistoryMode === 'single' && motors.size && (!current || !motors.has(current))) {
+    state.publicHistoryMotor = motors.keys().next().value;
+    replacePublicRoute();
+  }
   motorSelect.value = state.publicHistoryMotor;
   motorSelect.classList.toggle('hidden', state.publicHistoryMode !== 'single' || !motors.size);
+  $('#public-metric-select').value = state.publicHistoryMetric;
   $('#public-metric-select').classList.toggle('hidden', state.publicHistoryMode !== 'motors' || !motors.size);
   $('#public-history-range').classList.remove('hidden');
   $('#public-history-fixed-range').classList.add('hidden');
@@ -575,26 +639,16 @@ function renderPublicHistoryControls() {
 }
 
 function setPublicHistoryMode(mode) {
-  state.publicHistoryRequestID += 1;
-  state.publicHistoryLoading = false;
+  if (!PUBLIC_HISTORY_MODES.has(mode) || mode === state.publicHistoryMode) return;
   state.publicHistoryMode = mode;
-  state.publicHistory = [];
-  state.publicHistoryRobot = null;
-  state.publicHistoryDrawKey = '';
-  state.publicRealtimeStartedAt = 0;
-  state.publicRealtimeClockOffset = null;
-  renderPublicHistoryControls();
-  const robot = selectedPublicRobot();
-  syncPublicStream();
-  if (robot && publicHistoryIsRealtime()) {
-    startPublicRealtime(robot);
-    renderPublicHistoryControls();
-    drawPublicHistory(state.publicHistory);
-  } else if (robot) loadPublicHistory(robot);
-  else drawPublicHistory(state.publicHistory);
+  state.publicHistoryRange = mode === 'host' ? '1' : '60';
+  state.publicHistoryMetric = 'torque_nm';
+  state.publicHistoryMotor = mode === 'single' ? firstPublicMotorID() : '';
+  pushPublicRoute();
+  refreshPublicHistory();
 }
 
-function publicHistoryRange() { return $('#public-history-range')?.value || '1'; }
+function publicHistoryRange() { return state.publicHistoryRange; }
 function publicHistoryIsRealtime() { return (state.publicHistoryMode === 'single' || state.publicHistoryMode === 'motors') && publicHistoryRange() === 'realtime'; }
 
 function publicStreamOptionsForCurrent() {
@@ -620,7 +674,10 @@ async function loadPublicHistory(robot) {
     if (robot) primePublicRealtimeHistory(robot);
     return;
   }
+  state.publicHistoryController?.abort();
   const requestID = ++state.publicHistoryRequestID;
+  const controller = new AbortController();
+  state.publicHistoryController = controller;
   state.publicHistoryLoading = true;
   state.publicHistoryDrawKey = '';
   $('#public-chart-grid').innerHTML = '';
@@ -635,20 +692,21 @@ async function loadPublicHistory(robot) {
       : PUBLIC_ALL_MOTOR_SAMPLE_RATE_HZ;
     const motor = requestedMotor ? `&motor_id=${encodeURIComponent(requestedMotor)}` : '';
     const query = fastScope ? `scope=motors&seconds=${range}&sample_rate_hz=${sampleRate}${motor}` : `scope=host&hours=${range}&sample_rate_hz=${PUBLIC_HOST_SAMPLE_RATE_HZ}`;
-    const data = await api(`/api/v1/robots/${encodeURIComponent(robot.id)}/history?${query}`);
+    const data = await api(`/api/v1/robots/${encodeURIComponent(robot.id)}/history?${query}`, { signal: controller.signal });
     if (state.selected !== robot.id || requestID !== state.publicHistoryRequestID) return;
     state.publicHistory = data.points || [];
     state.publicHistoryRobot = robot.id;
     state.publicHistoryDrawKey = '';
     state.publicHistoryLoading = false;
     renderPublicHistoryControls();
-    if (state.publicHistoryMode === 'single' && !requestedMotor && state.publicHistoryMotor) {
+    if (state.publicHistoryMode === 'single' && requestedMotor !== state.publicHistoryMotor && state.publicHistoryMotor) {
       state.publicHistory = [];
       state.publicHistoryRobot = null;
       return loadPublicHistory(robot);
     }
     drawPublicHistory(state.publicHistory);
   } catch (error) {
+    if (error.name === 'AbortError' || requestID !== state.publicHistoryRequestID) return;
     if (requestID === state.publicHistoryRequestID && state.selected === robot.id) {
       $('#public-chart-grid').innerHTML = '';
       $('#public-history-empty').textContent = error.message;
@@ -656,19 +714,18 @@ async function loadPublicHistory(robot) {
     }
   } finally {
     if (requestID === state.publicHistoryRequestID) state.publicHistoryLoading = false;
-    const selected = selectedPublicRobot();
-    if (selected && selected.id !== robot.id) window.queueMicrotask(() => loadPublicHistory(selected));
+    if (state.publicHistoryController === controller) state.publicHistoryController = null;
   }
 }
 
-function motorSamplesToPoints(samples, labels = {}, stride = 1, preserveEnd = true) {
+function motorSamplesToPoints(samples, stride = 1, preserveEnd = true) {
   const source = samples || [];
   const step = Math.max(1, Math.floor(Number(stride) || 1));
   return source.filter((sample, index) => index % step === 0 || (preserveEnd && index === source.length - 1)).map((sample) => ({
     at: sample.at,
     motor_count: (sample.motors || []).length,
     motor_topic_online: true,
-    motors: (sample.motors || []).map((motor) => ({ ...motor, label: labels[motor.id] || motor.label || motor.id })),
+    motors: (sample.motors || []).map((motor) => ({ ...motor })),
   }));
 }
 
@@ -772,7 +829,7 @@ function appendPublicMotorSamples(robot) {
       return Number.isFinite(timestamp) && timestamp >= cutoff;
     })
     : robot.motor_samples;
-  const points = motorSamplesToPoints(samples, robot.motor_labels, stride, stride === 1);
+  const points = motorSamplesToPoints(samples, stride, stride === 1);
   if (state.publicHistoryMode === 'single' && state.publicHistoryMotor) {
     points.forEach(point => { point.motors = point.motors.filter(motor => motor.id === state.publicHistoryMotor); });
   }
@@ -888,13 +945,13 @@ async function downloadPublicRecording() {
   const rows = publicRecordingRows(events, publicRecorder.robotID);
   if (!rows.length) { toast('暂无可下载的录制数据', true); return; }
   const headers = [
-    '序号', '采样时间（UTC）', '机器人编码', '机器人ID', '记录类型', '电机ID', '电机名称',
+    '序号', '采样时间（UTC）', '机器人编码', '机器人ID', '记录类型', '电机ID',
     '电机位置（rad）', '电机速度（rad/s）', '电机转矩（N·m）', 'CPU使用率（%）', '内存使用率（%）',
     '磁盘使用率（%）', '系统负载（1m）', '最高温度（°C）', 'GPU使用率（%）', 'GPU温度（°C）',
     '电池电量（%）', '电池电压（V）', '电池电流（A）', '电池功率（W）'
   ];
   const body = [headers, ...rows.map((row, index) => [
-    index + 1, row.at, row.code, row.robotID, row.kind, row.motorID, row.motorLabel,
+    index + 1, row.at, row.code, row.robotID, row.kind, row.motorID,
     csvNumber(row.positionRad), csvNumber(row.velocityRadPerSec), csvNumber(row.torqueNm),
     csvNumber(row.cpuPercent), csvNumber(row.memoryPercent), csvNumber(row.diskPercent), csvNumber(row.load1),
     csvNumber(row.temperatureMax), csvNumber(row.gpuUtilizationPercent), csvNumber(row.gpuTemperatureCelsius),
@@ -923,7 +980,7 @@ function publicRecordingRows(events, robotID) {
     if (hostAt && !seen.has(`host:${hostAt}`)) {
       seen.add(`host:${hostAt}`);
       rows.push({
-        at: hostAt, code: robot.code || '', robotID, kind: '主机摘要', motorID: '', motorLabel: '',
+        at: hostAt, code: robot.code || '', robotID, kind: '主机摘要', motorID: '',
         cpuPercent: summary.cpu_percent, memoryPercent: summary.memory_percent, diskPercent: summary.disk_percent,
         load1: summary.load_1, temperatureMax: summary.temperature_max,
         gpuUtilizationPercent: summary.gpu?.utilization_percent, gpuTemperatureCelsius: summary.gpu?.temperature_celsius,
@@ -940,7 +997,6 @@ function publicRecordingRows(events, robotID) {
         seen.add(key);
         rows.push({
           at: sample.at, code: robot.code || '', robotID, kind: '电机采样', motorID: motor.id,
-          motorLabel: motor.label || robot.motor_labels?.[motor.id] || motor.id,
           positionRad: motor.position_rad, velocityRadPerSec: motor.velocity_rad_per_sec, torqueNm: motor.torque_nm
         });
       }
@@ -1209,11 +1265,11 @@ function publicChartSpecs(points) {
   };
   if (state.publicHistoryMode === 'motors') {
     const [label, unit, color] = metric[state.publicHistoryMetric];
-    return motors.map(({ id, label: motorLabel, index }) => ({ key: `motor:${id}:${state.publicHistoryMetric}`, group: motorLabel, label, unit, color, realtime: publicHistoryIsRealtime(), value: (point) => motorValue(point, id, index, state.publicHistoryMetric) }));
+    return motors.map(({ id, index }) => ({ key: `motor:${id}:${state.publicHistoryMetric}`, group: id, label, unit, color, realtime: publicHistoryIsRealtime(), value: (point) => motorValue(point, id, index, state.publicHistoryMetric) }));
   }
   const selected = motors.find(({ id }) => id === state.publicHistoryMotor);
   if (!selected) return [];
-  return Object.entries(metric).map(([field, [label, unit, color]]) => ({ key: `motor:${selected.id}:${field}`, group: selected.label, label, unit, color, realtime: publicHistoryIsRealtime(), value: (point) => motorValue(point, selected.id, selected.index, field) }));
+  return Object.entries(metric).map(([field, [label, unit, color]]) => ({ key: `motor:${selected.id}:${field}`, group: selected.id, label, unit, color, realtime: publicHistoryIsRealtime(), value: (point) => motorValue(point, selected.id, selected.index, field) }));
 }
 
 function motorDescriptors(points) {
@@ -1221,7 +1277,7 @@ function motorDescriptors(points) {
   for (let index = points.length - 1; index >= 0; index--) {
     if (points[index].motors?.length) { point = points[index]; break; }
   }
-  return (point?.motors || []).map((motor, index) => ({ id: motor.id, label: motor.label || motor.id, index }));
+  return (point?.motors || []).map((motor, index) => ({ id: motor.id, index }));
 }
 
 function motorValue(point, id, index, field) {

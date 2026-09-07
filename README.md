@@ -65,6 +65,16 @@ docker logs -f baize 2>&1 | grep 'invalid agent token'
 及 `wss://<host>/api/v1/ws/robots`。接口允许跨域只读嵌入，并且不暴露 UUID、
 主机名、操作系统、总线元数据或管理配置。
 
+机器人详情网址包含趋势筛选，例如
+`/robot/{public_id}?view=single&range=realtime&motor=motor_id_01`。
+`view` 支持 `host`、`motors`、`single`；主机 `range` 为小时数
+`1`、`6`、`24`、`168`，电机为 `60`（最近 1 分钟）或 `realtime`。
+全部电机通过 `metric=torque_nm|velocity_rad_per_sec|position_rad` 选择指标。
+选择器、图表和录制 CSV 直接使用上报的电机 ID，不显示关节别名。
+从列表打开机器人默认查看主机最近 1 小时；点击其他趋势维度使用该维度默认范围。
+刷新、分享链接及浏览器前进后退按网址恢复筛选，重新进入实时模式从当次进入开始累积。
+切换机器人、维度、范围或电机时会取消旧历史请求、清空旧图表数据并同步高频采样订阅。
+
 ## Agent
 
 GitHub Actions 构建 Linux AMD64/ARM64 静态 Agent；机器人只下载经 SHA-256 校验
