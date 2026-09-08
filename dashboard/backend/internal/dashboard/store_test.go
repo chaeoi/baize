@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,32 +9,6 @@ import (
 
 	"baize/shared/model"
 )
-
-func TestCompareVersions(t *testing.T) {
-	cases := []struct {
-		left, right string
-		want        int
-	}{{"20260814", "20260813", 1}, {"1.2.0", "1.1.9", 1}, {"v2.0.0", "1.99.0", 1}, {"1.0.0", "1.0.0", 0}, {"1.0.0", "1.0.1", -1}}
-	for _, test := range cases {
-		got := compareVersions(test.left, test.right)
-		if (got > 0) != (test.want > 0) || (got < 0) != (test.want < 0) {
-			t.Fatalf("compareVersions(%q, %q)=%d want sign %d", test.left, test.right, got, test.want)
-		}
-	}
-}
-
-func TestVersionPattern(t *testing.T) {
-	for _, version := range []string{"20260814"} {
-		if !versionPattern.MatchString(version) {
-			t.Fatalf("version %q should be accepted", version)
-		}
-	}
-	for _, version := range []string{"2026-08-14", "latest", "1", "0.1.0"} {
-		if versionPattern.MatchString(version) {
-			t.Fatalf("version %q should be rejected", version)
-		}
-	}
-}
 
 func TestStoreSeparatesControlAndHistoryAndKeepsOfflineRobots(t *testing.T) {
 	root := t.TempDir()
@@ -215,44 +188,5 @@ func TestControlSecretPersistsOutsideHistoryDatabase(t *testing.T) {
 	reused, created, err := reopened.Secret("jwt_secret", 32)
 	if err != nil || created || reused != secret {
 		t.Fatalf("persistent secret = %q created=%v err=%v", reused, created, err)
-	}
-}
-
-func TestLegacyStateAndReleaseAreMigratedIntoControlDatabase(t *testing.T) {
-	root := t.TempDir()
-	uuid := "52446a60-7483-4ba7-b8c7-b85f60b2a00f"
-	release := Release{ID: "linux-arm64-legacy", Version: "20260814", OS: "linux", Arch: "arm64", SHA256: "abc", Size: 6, UploadedAt: time.Now().UTC()}
-	legacy := legacyState{Remarks: map[string]string{uuid: "legacy remark"}, Desired: map[string]string{uuid: "20260814"}, Releases: map[string]Release{release.ID: release}}
-	data, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "state.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "releases"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "releases", release.ID), []byte("legacy"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewStore(filepath.Join(root, "control"), filepath.Join(root, "history"), StoreOptions{AdminUser: "admin", BootstrapPassword: "Baize@Admin1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.PutTelemetry(model.Telemetry{SchemaVersion: model.SchemaVersion, Robot: model.Robot{UUID: uuid, Code: "M99", OS: "linux", Arch: "arm64"}, CollectedAt: time.Now().UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	record, ok := store.Robot(uuid)
-	if !ok || record.Remark != "legacy remark" {
-		t.Fatalf("legacy settings missing: %+v", record)
-	}
-	migrated, ok := store.ReleaseByID(release.ID)
-	if !ok {
-		t.Fatal("legacy release metadata missing")
-	}
-	if content, err := os.ReadFile(migrated.Filename); err != nil || string(content) != "legacy" {
-		t.Fatalf("legacy release file missing: content=%q err=%v", content, err)
 	}
 }

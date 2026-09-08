@@ -1,7 +1,6 @@
 const state = {
   view: 'display',
   robots: [],
-  releases: [],
   selected: null,
   authenticated: false,
   passwordChangeRequired: false,
@@ -80,7 +79,6 @@ function bindEvents() {
   $('#robot-search').addEventListener('input', renderRobotList);
   $('#remark-button').addEventListener('click', openRemark);
   $('#remark-form').addEventListener('submit', saveRemark);
-  $('#release-form').addEventListener('submit', uploadRelease);
   $('#delete-robot-button').addEventListener('click', openDeleteRobot);
   $('#delete-robot-form').addEventListener('submit', deleteRobot);
   $('#history-range').addEventListener('change', loadHistory);
@@ -169,7 +167,6 @@ function enterDashboard() {
   $('#settings-session').textContent = state.adminUser;
   showApp();
   openStream('admin');
-  loadReleases();
 }
 
 async function api(path, options = {}, requiresLogin = false) {
@@ -1051,7 +1048,6 @@ function renderSettings() {
     ['电机 Topic', motor.topic || '-'], ['电机来源', motor.source || '-'], ['BMS 协议', bms.protocol || '-'], ['BMS Topic', bms.interface || '-']
   ]);
   $('#settings-session').textContent = state.adminUser;
-  renderReleases();
   if (state.historyRobot === robot.uuid) drawHistoryChart(state.history);
 }
 
@@ -1077,38 +1073,6 @@ async function saveRemark(event) {
     await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/remark`, { method: 'PATCH', body: JSON.stringify({ remark: $('#remark-input').value }) }, true);
     $('#remark-dialog').close(); toast('备注已更新');
   } catch (error) { toast(error.message, true); }
-}
-
-async function loadReleases() {
-  try {
-    const data = await api('/api/v1/admin/releases', {}, true);
-    state.releases = data.releases || [];
-    render();
-  } catch (error) { if (error.message !== '登录已失效') toast(error.message, true); }
-}
-
-async function uploadRelease(event) {
-  event.preventDefault();
-  const element = event.currentTarget;
-  const button = element.querySelector('button[type="submit"]');
-  const form = new FormData(element);
-  button.disabled = true;
-  try {
-    await api('/api/v1/admin/releases', { method: 'POST', body: form }, true);
-    element.reset(); await loadReleases(); toast('Agent 发布已上传');
-  } catch (error) { toast(error.message, true); }
-  finally { button.disabled = false; }
-}
-
-function renderReleases() {
-  if (!$('#release-list')) return;
-  $('#release-list').innerHTML = state.releases.map((release) => `<div class="release-row"><strong>${escapeHTML(release.version)}</strong><span>${escapeHTML(release.os)}/${escapeHTML(release.arch)}</span><code>${escapeHTML(release.sha256.slice(0, 12))} · ${bytes(release.size)}</code><button class="icon-button" data-release="${escapeHTML(release.id)}" type="button" title="删除发布" aria-label="删除发布"><i data-lucide="trash-2"></i></button></div>`).join('') || '<div class="empty-line">暂无发布文件</div>';
-  $$('#release-list [data-release]').forEach((button) => button.addEventListener('click', () => deleteRelease(button.dataset.release)));
-  renderIcons();
-}
-
-async function deleteRelease(id) {
-  try { await api(`/api/v1/admin/releases/${encodeURIComponent(id)}`, { method: 'DELETE' }, true); await loadReleases(); toast('发布文件已删除'); } catch (error) { toast(error.message, true); }
 }
 
 function openDeleteRobot() {

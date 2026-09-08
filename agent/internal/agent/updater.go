@@ -18,7 +18,11 @@ import (
 	"baize/shared/model"
 )
 
-func ApplyUpdate(ctx context.Context, client *Client, update model.UpdateInfo) error {
+type UpdateDownloader interface {
+	Download(context.Context, model.UpdateInfo, io.Writer) error
+}
+
+func ApplyUpdate(ctx context.Context, client UpdateDownloader, update model.UpdateInfo) error {
 	if update.OS != runtime.GOOS || update.Arch != runtime.GOARCH {
 		return fmt.Errorf("update platform %s/%s does not match %s/%s", update.OS, update.Arch, runtime.GOOS, runtime.GOARCH)
 	}
@@ -33,7 +37,7 @@ func ApplyUpdate(ctx context.Context, client *Client, update model.UpdateInfo) e
 	return applyUpdate(ctx, client, update, executable, os.Args, os.Environ(), syscall.Exec)
 }
 
-func applyUpdate(ctx context.Context, client *Client, update model.UpdateInfo, executable string, arguments, environment []string, execute func(string, []string, []string) error) error {
+func applyUpdate(ctx context.Context, client UpdateDownloader, update model.UpdateInfo, executable string, arguments, environment []string, execute func(string, []string, []string) error) error {
 	info, err := os.Stat(executable)
 	if err != nil {
 		return err

@@ -12,11 +12,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"math"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -30,14 +28,12 @@ import (
 	"time"
 	"unicode"
 
-	"baize/shared/agentbinary"
 	"baize/shared/model"
 )
 
 const (
 	maxTelemetryBytes           = 32 << 20
 	maxCompressedTelemetryBytes = 16 << 20
-	maxReleaseBytes             = 128 << 20
 	fastMotorHistoryLimit       = 32_000
 	historyPointLimit           = 400_000
 	publicHostSampleRateHz      = 0.5
@@ -46,11 +42,8 @@ const (
 )
 
 var (
-	uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
-	// All release channels use the public projects' UTC YYYYMMDD version scheme.
-	versionPattern  = regexp.MustCompile(`^[0-9]{8}$`)
-	platformPattern = regexp.MustCompile(`^[a-z0-9_-]{2,20}$`)
-	motorIDPattern  = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
+	uuidPattern    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+	motorIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 )
 
 type ServerConfig struct {
@@ -91,13 +84,9 @@ func NewServer(cfg ServerConfig, store *Store) *Server {
 	mux.HandleFunc("/api/v1/robots/", server.publicRobotAction)
 	mux.HandleFunc("/api/v1/ws/robots", server.publicRobotStream)
 	mux.HandleFunc("/api/v1/telemetry", server.requireAgent(server.telemetry))
-	mux.HandleFunc("/api/v1/update/check", server.requireAgent(server.updateCheck))
-	mux.HandleFunc("/api/v1/update/files/", server.requireAgent(server.updateFile))
 	mux.HandleFunc("/api/v1/admin/robots", server.requireAdmin(server.adminRobots))
 	mux.HandleFunc("/api/v1/admin/robots/", server.requireAdmin(server.robotAction))
 	mux.HandleFunc("/api/v1/admin/ws/robots", server.requireAdmin(server.adminRobotStream))
-	mux.HandleFunc("/api/v1/admin/releases", server.requireAdmin(server.releases))
-	mux.HandleFunc("/api/v1/admin/releases/", server.requireAdmin(server.releaseAction))
 	mux.HandleFunc("/api/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeError(writer, http.StatusNotFound, "API route not found")
 	})
@@ -269,53 +258,6 @@ func (s *Server) telemetry(writer http.ResponseWriter, request *http.Request) {
 	}
 	s.broadcastRobot(telemetry.Robot.UUID)
 	writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
-}
-
-func (s *Server) updateCheck(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		methodNotAllowed(writer)
-		return
-	}
-	query := request.URL.Query()
-	uuid, current := query.Get("uuid"), query.Get("version")
-	goos, arch := query.Get("os"), query.Get("arch")
-	if !uuidPattern.MatchString(uuid) || !platformPattern.MatchString(goos) || !platformPattern.MatchString(arch) {
-		writeError(writer, http.StatusBadRequest, "invalid update query")
-		return
-	}
-	release, found := s.store.FindUpdate(current, goos, arch)
-	if !found {
-		writeJSON(writer, http.StatusOK, map[string]bool{"available": false})
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"available": true,
-		"update": model.UpdateInfo{
-			Version: release.Version, OS: release.OS, Arch: release.Arch,
-			SHA256: release.SHA256, Size: release.Size, URL: "/api/v1/update/files/" + release.ID,
-		},
-	})
-}
-
-func (s *Server) updateFile(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		methodNotAllowed(writer)
-		return
-	}
-	id := strings.TrimPrefix(request.URL.Path, "/api/v1/update/files/")
-	if !safeReleaseID(id) {
-		writeError(writer, http.StatusBadRequest, "invalid release id")
-		return
-	}
-	release, ok := s.store.ReleaseByID(id)
-	if !ok {
-		writeError(writer, http.StatusNotFound, "release not found")
-		return
-	}
-	writer.Header().Set("Content-Type", "application/octet-stream")
-	writer.Header().Set("Content-Disposition", `attachment; filename="baize-agent"`)
-	writer.Header().Set("X-Content-SHA256", release.SHA256)
-	http.ServeFile(writer, request, release.Filename)
 }
 
 func (s *Server) robots(writer http.ResponseWriter, request *http.Request) {
@@ -626,108 +568,6 @@ func (s *Server) broadcastRobot(uuid string) {
 	}
 }
 
-func (s *Server) releases(writer http.ResponseWriter, request *http.Request) {
-	switch request.Method {
-	case http.MethodGet:
-		writeJSON(writer, http.StatusOK, map[string]any{"releases": s.store.Releases()})
-	case http.MethodPost:
-		s.uploadRelease(writer, request)
-	default:
-		methodNotAllowed(writer)
-	}
-}
-
-func (s *Server) uploadRelease(writer http.ResponseWriter, request *http.Request) {
-	request.Body = http.MaxBytesReader(writer, request.Body, maxReleaseBytes+(1<<20))
-	if err := request.ParseMultipartForm(maxReleaseBytes + (1 << 20)); err != nil {
-		writeError(writer, http.StatusBadRequest, "invalid or oversized upload")
-		return
-	}
-	defer request.MultipartForm.RemoveAll()
-	version, goos, arch := request.FormValue("version"), request.FormValue("os"), request.FormValue("arch")
-	if !versionPattern.MatchString(version) || !platformPattern.MatchString(goos) || !platformPattern.MatchString(arch) {
-		writeError(writer, http.StatusBadRequest, "invalid release metadata")
-		return
-	}
-	file, _, err := request.FormFile("binary")
-	if err != nil {
-		writeError(writer, http.StatusBadRequest, "binary is required")
-		return
-	}
-	defer file.Close()
-	release, err := s.saveReleaseFile(file, version, goos, arch)
-	if err != nil {
-		writeError(writer, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := s.store.AddRelease(release); err != nil {
-		_ = os.Remove(release.Filename)
-		writeError(writer, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(writer, http.StatusCreated, release)
-}
-
-func (s *Server) saveReleaseFile(source multipart.File, version, goos, arch string) (Release, error) {
-	temporary, err := os.CreateTemp(filepath.Join(s.store.dataDir, "releases"), ".upload-*")
-	if err != nil {
-		return Release{}, err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	hash := sha256.New()
-	written, err := io.Copy(io.MultiWriter(temporary, hash), io.LimitReader(source, maxReleaseBytes+1))
-	if err != nil {
-		temporary.Close()
-		return Release{}, err
-	}
-	if written == 0 || written > maxReleaseBytes {
-		temporary.Close()
-		return Release{}, errors.New("binary must be between 1 byte and 128 MiB")
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return Release{}, err
-	}
-	if err := temporary.Close(); err != nil {
-		return Release{}, err
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	if err := agentbinary.Validate(temporaryPath, goos, arch); err != nil {
-		return Release{}, err
-	}
-	id := fmt.Sprintf("%s-%s-%s-%s", goos, arch, sanitizeVersion(version), digest[:12])
-	destination := filepath.Join(s.store.dataDir, "releases", id)
-	if err := os.Rename(temporaryPath, destination); err != nil {
-		return Release{}, err
-	}
-	if err := os.Chmod(destination, 0o640); err != nil {
-		return Release{}, err
-	}
-	return Release{ID: id, Version: version, OS: goos, Arch: arch, SHA256: digest, Size: written, UploadedAt: time.Now().UTC(), Filename: destination}, nil
-}
-
-func (s *Server) releaseAction(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodDelete {
-		methodNotAllowed(writer)
-		return
-	}
-	id := strings.TrimPrefix(request.URL.Path, "/api/v1/admin/releases/")
-	if !safeReleaseID(id) {
-		writeError(writer, http.StatusBadRequest, "invalid release id")
-		return
-	}
-	if err := s.store.DeleteRelease(id); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			writeError(writer, http.StatusNotFound, "release not found")
-		} else {
-			writeError(writer, http.StatusConflict, err.Error())
-		}
-		return
-	}
-	writer.WriteHeader(http.StatusNoContent)
-}
-
 func (s *Server) requireAgent(next http.HandlerFunc) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		authorization := request.Header.Get("Authorization")
@@ -999,10 +839,6 @@ func tokenFingerprint(token string) string {
 	}
 	digest := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(digest[:])[:12]
-}
-
-func sanitizeVersion(version string) string {
-	return strings.NewReplacer("+", "_", "-", "_", ".", "_").Replace(version)
 }
 
 func sortedKeys[V any](values map[string]V) []string {

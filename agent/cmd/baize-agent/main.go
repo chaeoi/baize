@@ -119,6 +119,12 @@ func run(ctx context.Context, cfg config.Config) error {
 	if cfg.BMS.Enabled {
 		bmsCollector = collector.NewBMSCollector(cfg.BMS)
 	}
+	if err := agent.ConfirmUpdate(); err != nil {
+		slog.Warn("confirm Agent startup", "error", err)
+	}
+	if cfg.Update.Enabled && version != "dev" {
+		go updateLoop(ctx, cfg, httpClient)
+	}
 
 	identity := model.Robot{UUID: cfg.Agent.UUID, Code: cfg.Agent.RobotCode, Model: cfg.Agent.RobotModel, Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH}
 	reportInterval := cfg.Agent.ReportInterval.Value()
@@ -127,7 +133,6 @@ func run(ctx context.Context, cfg config.Config) error {
 	}
 	ticker := time.NewTicker(reportInterval)
 	defer ticker.Stop()
-	confirmed := false
 	for {
 		started := time.Now()
 		telemetry := collect(ctx, cfg, identity, systemCollector, motorCollector, bmsCollector)
@@ -145,16 +150,6 @@ func run(ctx context.Context, cfg config.Config) error {
 		cancel()
 		if err != nil {
 			slog.Warn("report telemetry", "error", err)
-		}
-		if !confirmed {
-			if err := agent.ConfirmUpdate(); err != nil {
-				slog.Warn("confirm Agent startup", "error", err)
-			} else {
-				confirmed = true
-				if cfg.Update.Enabled && version != "dev" {
-					go updateLoop(ctx, cfg, dashboardClient)
-				}
-			}
 		}
 		slog.Debug("collection complete", "duration", time.Since(started))
 		select {
@@ -228,11 +223,12 @@ func collect(ctx context.Context, cfg config.Config, robot model.Robot, systemCo
 	return result
 }
 
-func updateLoop(ctx context.Context, cfg config.Config, client *agent.Client) {
+func updateLoop(ctx context.Context, cfg config.Config, httpClient *http.Client) {
+	client := agent.NewGitHubClient(httpClient)
 	check := func() {
 		checkCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
 		defer cancel()
-		update, err := client.CheckUpdate(checkCtx, cfg.Agent.UUID, version, runtime.GOOS, runtime.GOARCH)
+		update, err := client.Check(checkCtx, version, runtime.GOOS, runtime.GOARCH)
 		if err != nil {
 			slog.Warn("check update", "error", err)
 			return

@@ -16,8 +16,10 @@ import (
 const maxOutboxBytes = 256 << 20
 
 type Outbox struct {
-	directory string
-	mu        sync.Mutex
+	directory  string
+	mu         sync.Mutex
+	retryAt    time.Time
+	retryDelay time.Duration
 }
 
 func NewOutbox(directory string) (*Outbox, error) {
@@ -75,6 +77,9 @@ func (o *Outbox) Enqueue(telemetry model.Telemetry) error {
 func (o *Outbox) Flush(ctx context.Context, client *Client) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if !o.retryAt.IsZero() && time.Now().Before(o.retryAt) {
+		return nil
+	}
 	entries, err := os.ReadDir(o.directory)
 	if err != nil {
 		return err
@@ -93,11 +98,19 @@ func (o *Outbox) Flush(ctx context.Context, client *Client) error {
 			return fmt.Errorf("read queued telemetry: %w", err)
 		}
 		if err := client.Report(ctx, telemetry); err != nil {
+			if o.retryDelay == 0 {
+				o.retryDelay = time.Second
+			} else if o.retryDelay < 5*time.Minute {
+				o.retryDelay *= 2
+			}
+			o.retryAt = time.Now().Add(o.retryDelay)
 			return err
 		}
 		if err := os.Remove(path); err != nil {
 			return err
 		}
 	}
+	o.retryAt = time.Time{}
+	o.retryDelay = 0
 	return nil
 }

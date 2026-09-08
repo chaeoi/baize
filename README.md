@@ -3,7 +3,7 @@
 白泽由机器人端 Agent 和管理 Dashboard 组成。Dashboard 的控制数据保存在独立的
 SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌入式 VictoriaMetrics TSDB
 目录 `/dashboard/data/history/host` 与 `/dashboard/data/history/motor`，不需要额外数据库容器。迁移时只复制
-`control` 即可保留机器人身份、备注、管理员账号、发布版本和 Dashboard JWT 密钥；历史目录可按
+`control` 即可保留机器人身份、备注、管理员账号和 Dashboard JWT 密钥；历史目录可按
 保留策略丢弃。旧版 `history.db` 不再读取或迁移。
 
 主机、电池、GPU 和电机摘要按 `history_sample_interval`（默认 2 秒，0.5 Hz）写入 `host`，
@@ -114,7 +114,8 @@ curl -fsSL https://raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/inst
 ```
 
 下载脚本只负责选择架构、校验 Release，然后把安装参数传给
-`baize-agent service install`。Agent 只会自动检查并升级到更新的兼容版本。
+`baize-agent service install`。安装后的 Agent 按 `update.check_interval` 定时直接检查
+GitHub Release，并在校验通过后自动升级，不依赖 Dashboard 在线或参与发布。
 未传 `--uuid` 时 Agent 生成永久 UUID；也支持 `--force-config`。安装参数只用于写入 `config.yml`，不会成为第二个
 运行时配置来源；已有有效配置默认保留，传入某个参数时只更新对应字段。`--force-config`
 用于从默认模板重新生成配置。可用以下命令查看状态或卸载服务；卸载保留二进制和配置，

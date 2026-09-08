@@ -7,13 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,17 +18,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
-
-type Release struct {
-	ID         string    `json:"id"`
-	Version    string    `json:"version"`
-	OS         string    `json:"os"`
-	Arch       string    `json:"arch"`
-	SHA256     string    `json:"sha256"`
-	Size       int64     `json:"size"`
-	UploadedAt time.Time `json:"uploaded_at"`
-	Filename   string    `json:"-"`
-}
 
 type RobotRecord struct {
 	UUID         string          `json:"uuid"`
@@ -106,7 +92,7 @@ func NewStore(dataDir, historyDir string, options StoreOptions) (*Store, error) 
 	if options.HistorySampleInterval <= 0 {
 		options.HistorySampleInterval = 2 * time.Second
 	}
-	if err := os.MkdirAll(filepath.Join(dataDir, "releases"), 0o750); err != nil {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(historyDir, 0o750); err != nil {
@@ -173,17 +159,7 @@ CREATE TABLE IF NOT EXISTS robots (
 CREATE INDEX IF NOT EXISTS robots_code_idx ON robots(code);
 CREATE TABLE IF NOT EXISTS robot_settings (
   uuid TEXT PRIMARY KEY,
-  remark TEXT NOT NULL DEFAULT '',
-  desired_version TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS releases (
-  id TEXT PRIMARY KEY,
-  version TEXT NOT NULL,
-  os TEXT NOT NULL,
-  arch TEXT NOT NULL,
-  sha256 TEXT NOT NULL,
-  size INTEGER NOT NULL,
-  uploaded_at INTEGER NOT NULL
+  remark TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS admin_accounts (
   username TEXT PRIMARY KEY,
@@ -201,9 +177,7 @@ CREATE TABLE IF NOT EXISTS control_meta (
 }
 
 type legacyState struct {
-	Remarks  map[string]string  `json:"remarks"`
-	Desired  map[string]string  `json:"desired"`
-	Releases map[string]Release `json:"releases"`
+	Remarks map[string]string `json:"remarks"`
 }
 
 func (s *Store) importLegacyState() error {
@@ -241,77 +215,10 @@ func (s *Store) importLegacyState() error {
 			return err
 		}
 	}
-	for id, release := range legacy.Releases {
-		if !safeReleaseID(id) {
-			continue
-		}
-		if !legacyReleaseExists(s, id) {
-			continue
-		}
-		if err := s.migrateLegacyRelease(id); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO releases(id, version, os, arch, sha256, size, uploaded_at) VALUES(?, ?, ?, ?, ?, ?, ?)`, id, release.Version, release.OS, release.Arch, release.SHA256, release.Size, release.UploadedAt.UnixNano()); err != nil {
-			return err
-		}
-	}
 	if _, err := tx.Exec(`INSERT INTO control_meta(key, value) VALUES('legacy_state_imported', '1')`); err != nil {
 		return err
 	}
 	return tx.Commit()
-}
-
-func legacyReleaseExists(s *Store, id string) bool {
-	for _, path := range []string{filepath.Join(s.dataDir, "releases", id), filepath.Join(filepath.Dir(s.dataDir), "releases", id)} {
-		if _, err := os.Stat(path); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
-func safeReleaseID(id string) bool {
-	return id != "" && id != "." && id != ".." && len(id) <= 200 && filepath.Base(id) == id && !strings.ContainsAny(id, "\x00\r\n")
-}
-
-func (s *Store) migrateLegacyRelease(id string) error {
-	destination := filepath.Join(s.dataDir, "releases", id)
-	if _, err := os.Stat(destination); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	source := filepath.Join(filepath.Dir(s.dataDir), "releases", id)
-	input, err := os.Open(source)
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("legacy release %s is missing", id)
-	}
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-	temporary, err := os.CreateTemp(filepath.Dir(destination), ".legacy-release-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if _, err := io.Copy(temporary, input); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Chmod(0o640); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, destination)
 }
 
 func (s *Store) ensureAdmin(username, bootstrapPassword string, forceChange bool) error {
@@ -586,95 +493,6 @@ func (s *Store) RemoveRobot(uuid string) error {
 	return nil
 }
 
-func (s *Store) AddRelease(release Release) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.control.Exec(`INSERT INTO releases(id, version, os, arch, sha256, size, uploaded_at) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET version=excluded.version, os=excluded.os, arch=excluded.arch, sha256=excluded.sha256, size=excluded.size, uploaded_at=excluded.uploaded_at`, release.ID, release.Version, release.OS, release.Arch, release.SHA256, release.Size, release.UploadedAt.UnixNano())
-	return err
-}
-
-func (s *Store) DeleteRelease(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	release, ok := s.releaseByIDLocked(id)
-	if !ok {
-		return os.ErrNotExist
-	}
-	if err := os.Remove(release.Filename); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	_, err := s.control.Exec(`DELETE FROM releases WHERE id = ?`, id)
-	return err
-}
-
-func (s *Store) Releases() []Release {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.releasesLocked()
-}
-
-func (s *Store) releasesLocked() []Release {
-	rows, err := s.control.Query(`SELECT id, version, os, arch, sha256, size, uploaded_at FROM releases`)
-	if err != nil {
-		slog.Warn("list releases", "error", err)
-		return nil
-	}
-	defer rows.Close()
-	result := make([]Release, 0)
-	for rows.Next() {
-		var release Release
-		var uploadedAt int64
-		if err := rows.Scan(&release.ID, &release.Version, &release.OS, &release.Arch, &release.SHA256, &release.Size, &uploadedAt); err != nil {
-			continue
-		}
-		release.UploadedAt = unixNano(uploadedAt)
-		release.Filename = filepath.Join(s.dataDir, "releases", release.ID)
-		result = append(result, release)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		comparison := compareVersions(result[i].Version, result[j].Version)
-		if comparison == 0 {
-			return result[i].UploadedAt.After(result[j].UploadedAt)
-		}
-		return comparison > 0
-	})
-	return result
-}
-
-func (s *Store) ReleaseByID(id string) (Release, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.releaseByIDLocked(id)
-}
-
-func (s *Store) releaseByIDLocked(id string) (Release, bool) {
-	var release Release
-	var uploadedAt int64
-	err := s.control.QueryRow(`SELECT id, version, os, arch, sha256, size, uploaded_at FROM releases WHERE id = ?`, id).Scan(&release.ID, &release.Version, &release.OS, &release.Arch, &release.SHA256, &release.Size, &uploadedAt)
-	if err != nil {
-		return Release{}, false
-	}
-	release.UploadedAt = unixNano(uploadedAt)
-	release.Filename = filepath.Join(s.dataDir, "releases", release.ID)
-	return release, true
-}
-
-func (s *Store) FindUpdate(current, goos, arch string) (Release, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var best Release
-	found := false
-	for _, release := range s.releasesLocked() {
-		if release.OS != goos || release.Arch != arch || compareVersions(release.Version, current) <= 0 {
-			continue
-		}
-		if !found || compareVersions(release.Version, best.Version) > 0 {
-			best, found = release, true
-		}
-	}
-	return best, found
-}
-
 func (s *Store) insertHistory(uuid string, telemetry model.Telemetry, receivedAt time.Time) error {
 	point := makeHistoryPoint(telemetry)
 	if previous, ok := s.lastHistory[uuid]; ok && !point.At.Before(previous) && point.At.Sub(previous) < s.historyEvery {
@@ -847,42 +665,4 @@ func unixNano(value int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(0, value).UTC()
-}
-
-func compareVersions(left, right string) int {
-	leftParts := versionNumbers(left)
-	rightParts := versionNumbers(right)
-	length := len(leftParts)
-	if len(rightParts) > length {
-		length = len(rightParts)
-	}
-	for i := 0; i < length; i++ {
-		var l, r int
-		if i < len(leftParts) {
-			l = leftParts[i]
-		}
-		if i < len(rightParts) {
-			r = rightParts[i]
-		}
-		if l < r {
-			return -1
-		}
-		if l > r {
-			return 1
-		}
-	}
-	return strings.Compare(left, right)
-}
-
-func versionNumbers(version string) []int {
-	version = strings.TrimPrefix(strings.TrimPrefix(version, "v"), "V")
-	if index := strings.IndexAny(version, "-+"); index >= 0 {
-		version = version[:index]
-	}
-	parts := strings.Split(version, ".")
-	result := make([]int, len(parts))
-	for i, part := range parts {
-		result[i], _ = strconv.Atoi(part)
-	}
-	return result
 }
