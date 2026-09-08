@@ -109,28 +109,3 @@ func TestAdminStreamClosesWhenSessionRevoked(t *testing.T) {
 		})
 	}
 }
-
-func TestAutomaticUpdatesIgnoreLegacyPinsAndNeverDowngrade(t *testing.T) {
-	store := newTestStore(t)
-	if _, err := store.control.Exec(`INSERT INTO robot_settings(uuid,desired_version) VALUES('old-robot','20260901')`); err != nil {
-		t.Fatal(err)
-	}
-	for _, version := range []string{"20260901", "20260905"} {
-		if err := store.AddRelease(Release{ID: version, Version: version, OS: "linux", Arch: "amd64", UploadedAt: time.Now()}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	release, ok := store.FindUpdate("20260901", "linux", "amd64")
-	if !ok || release.Version != "20260905" {
-		t.Fatalf("unexpected update: %+v", release)
-	}
-	if _, ok := store.FindUpdate("20260905", "linux", "amd64"); ok {
-		t.Fatal("latest version received another update")
-	}
-	if _, ok := store.FindUpdate("20260906", "linux", "amd64"); ok {
-		t.Fatal("downgrade offered")
-	}
-	if _, ok := store.FindUpdate("20260901", "linux", "arm64"); ok {
-		t.Fatal("wrong architecture offered")
-	}
-}

@@ -2,10 +2,12 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -120,7 +122,7 @@ func main(){for _,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("202609
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(binary) }))
 	defer server.Close()
-	client := NewClient(server.URL, "token", server.Client())
+	client := testUpdateDownloader{client: server.Client(), url: server.URL}
 	hash := sha256.Sum256(binary)
 	update := model.UpdateInfo{Version: "20260905", OS: "linux", Arch: runtime.GOARCH, SHA256: hex.EncodeToString(hash[:]), Size: int64(len(binary)), URL: "/api/v1/update/files/test"}
 	for _, wrongVersion := range []bool{true, false} {
@@ -155,4 +157,23 @@ func main(){for _,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("202609
 			}
 		})
 	}
+}
+
+type testUpdateDownloader struct {
+	client *http.Client
+	url    string
+}
+
+func (d testUpdateDownloader) Download(ctx context.Context, _ model.UpdateInfo, writer io.Writer) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
+	if err != nil {
+		return err
+	}
+	response, err := d.client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	_, err = io.Copy(writer, response.Body)
+	return err
 }
