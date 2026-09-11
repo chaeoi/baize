@@ -1192,7 +1192,7 @@ function motorStatusText(summary, online) {
   const count = Number(summary?.motor_count) || 0;
   if (!online) return count ? `${count} 个离线` : '设备离线';
   if (!count) return '暂无数据';
-  return `${count} 个在线`;
+  return `${count} 个${summary?.motor_topic_online ? '在线' : '离线'}`;
 }
 
 function setMetric(name, value, display, sub) {
