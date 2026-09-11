@@ -407,14 +407,14 @@ function renderRobotList() {
     const metric = (label, value, sub, level) => `<div class="robot-card-metric"><span>${label}</span><strong>${value}</strong><div class="meter"><i class="${meterClass(level)}"></i></div><small>${sub}</small></div>`;
     return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="${escapeHTML(publicRouteURL(robot.id, defaultPublicHistoryRoute()))}">
       <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong>${remark ? `<small>${escapeHTML(remark)}</small>` : ''}</div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
-      <div class="robot-card-meta"><time>${relativeTime(robot.last_seen)}</time></div>
+      <div class="robot-card-meta"><time>${online ? relativeTime(robot.last_seen) : `最后上报 ${formatDate(robot.last_seen)}`}</time></div>
       <div class="robot-card-metrics">
-        ${metric('CPU', online && summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', online && summary.has_telemetry ? `负载 ${fixed(summary.load_1)}` : '整机已离线', online && summary.has_telemetry ? summary.cpu_percent : NaN)}
-        ${metric('内存', online && summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', online && summary.has_telemetry ? '系统内存' : '整机已离线', online && summary.has_telemetry ? summary.memory_percent : NaN)}
-        ${metric('磁盘', online && summary.has_telemetry ? `${fixed(summary.disk_percent)}%` : '--', online && summary.has_telemetry ? '根目录' : '整机已离线', online && summary.has_telemetry ? summary.disk_percent : NaN)}
-        ${metric('电池', batteryOnline ? `${fixed(battery.soc_percent)}%` : '--', battery ? (online ? `${fixed(battery.voltage)} V` : '整机已离线') : '未接入', batteryOnline ? battery.soc_percent : NaN)}
+        ${metric('CPU', online && summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', online && summary.has_telemetry ? `负载 ${fixed(summary.load_1)}` : '暂无数据', online && summary.has_telemetry ? summary.cpu_percent : NaN)}
+        ${metric('内存', online && summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', online && summary.has_telemetry ? '系统内存' : '暂无数据', online && summary.has_telemetry ? summary.memory_percent : NaN)}
+        ${metric('磁盘', online && summary.has_telemetry ? `${fixed(summary.disk_percent)}%` : '--', online && summary.has_telemetry ? '根目录' : '暂无数据', online && summary.has_telemetry ? summary.disk_percent : NaN)}
+        ${metric('电池', batteryOnline ? `${fixed(battery.soc_percent)}%` : '--', battery ? (batteryOnline ? `${fixed(battery.voltage)} V` : (online ? '暂无数据' : '设备离线')) : '未接入', batteryOnline ? battery.soc_percent : NaN)}
       </div>
-      <footer><span>${online && summary.gpu ? `GPU ${fixed(summary.gpu.utilization_percent)}%` : (online ? 'GPU 无数据' : 'GPU 状态未知')}</span><span>${summary.motor_count || 0} 个电机 · ${online && summary.motor_topic_online ? '有数据' : '无实时数据'}</span><span class="robot-card-diagnostic ${summary.diagnostic_count && online ? 'has-alert' : ''}">${summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项诊断` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '诊断正常' : '诊断状态未知')}</span></footer>
+      <footer><span>${online && summary.gpu ? `GPU ${fixed(summary.gpu.utilization_percent)}%` : 'GPU 暂无数据'}</span><span>${summary.motor_count || 0} 个电机 · ${online && summary.motor_topic_online ? '有数据' : '暂无数据'}</span><span class="robot-card-diagnostic ${summary.diagnostic_count && online ? 'has-alert' : ''}">${summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项诊断` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '诊断正常' : '暂无诊断')}</span></footer>
     </a>`;
   }).join('') || '<div class="empty-line">没有匹配设备</div>';
   $$('#robot-list .robot-card').forEach((card) => card.addEventListener('click', (event) => {
@@ -433,24 +433,25 @@ function renderPublicDetail(robot) {
   $('#robot-status').textContent = online ? '在线运行' : '离线';
   $('#robot-status').classList.toggle('online', online);
   $('#detail-beacon').classList.toggle('online', online);
-  $('#detail-updated-text').textContent = `采集于 ${formatDate(robot.collected_at)} · ${relativeTime(robot.last_seen)}收到`;
+  $('#robot-last-seen').textContent = online ? '' : `最后上报 ${formatDate(robot.last_seen)}`;
+  $('#detail-updated-text').textContent = online ? `采集于 ${formatDate(robot.collected_at)} · ${relativeTime(robot.last_seen)}收到` : `最后上报 ${formatDate(robot.last_seen)}`;
   const hasTelemetry = online && Boolean(summary.has_telemetry);
-  setMetric('cpu', hasTelemetry ? summary.cpu_percent : NaN, hasTelemetry ? `${fixed(summary.cpu_percent)}%` : '--', hasTelemetry ? `负载 ${fixed(summary.load_1)}` : '等待新数据');
-  setMetric('memory', hasTelemetry ? summary.memory_percent : NaN, hasTelemetry ? `${fixed(summary.memory_percent)}%` : '--', hasTelemetry ? '内存占用' : '等待新数据');
-  setMetric('disk', hasTelemetry ? summary.disk_percent : NaN, hasTelemetry ? `${fixed(summary.disk_percent)}%` : '--', hasTelemetry ? '根目录占用' : '等待新数据');
+  setMetric('cpu', hasTelemetry ? summary.cpu_percent : NaN, hasTelemetry ? `${fixed(summary.cpu_percent)}%` : '--', hasTelemetry ? `负载 ${fixed(summary.load_1)}` : '暂无数据');
+  setMetric('memory', hasTelemetry ? summary.memory_percent : NaN, hasTelemetry ? `${fixed(summary.memory_percent)}%` : '--', hasTelemetry ? '内存占用' : '暂无数据');
+  setMetric('disk', hasTelemetry ? summary.disk_percent : NaN, hasTelemetry ? `${fixed(summary.disk_percent)}%` : '--', hasTelemetry ? '根目录占用' : '暂无数据');
   const batteryOnline = online && battery?.online && battery?.present !== false;
-  setMetric('battery', batteryOnline ? battery.soc_percent : NaN, batteryOnline ? `${fixed(battery.soc_percent)}%` : '--', battery ? (online ? `${fixed(battery.voltage)} V · ${fixed(battery.current)} A` : '整机已离线') : '未启用');
+  setMetric('battery', batteryOnline ? battery.soc_percent : NaN, batteryOnline ? `${fixed(battery.soc_percent)}%` : '--', battery ? (batteryOnline ? `${fixed(battery.voltage)} V · ${fixed(battery.current)} A` : (online ? '暂无数据' : '设备离线')) : '未启用');
   $('#system-facts').innerHTML = facts([
     ['负载', hasTelemetry ? fixed(summary.load_1) : '--'], ['运行时长', hasTelemetry ? duration(summary.uptime_seconds) : '--'], ['采集时间', formatDate(robot.collected_at)], ['状态', online ? '在线运行' : '离线']
   ]);
   const maxTemp = summary.temperature_max;
   const minTemp = summary.temperature_min;
-  $('#thermal-summary').innerHTML = !online ? '<div class="empty-line">整机已离线，暂不显示旧温度</div>' : maxTemp === undefined ? '<div class="empty-line">无温度数据</div>' : `<div class="thermal-reading ${maxTemp >= 80 ? 'hot' : ''}"><span>最高温度</span><strong>${fixed(maxTemp)} °C</strong></div><div class="thermal-reading"><span>最低温度</span><strong>${fixed(minTemp)} °C</strong></div><div class="thermal-note">设备上报的热传感器摘要</div>`;
+  $('#thermal-summary').innerHTML = !online || maxTemp === undefined ? '<div class="empty-line">暂无温度数据</div>' : `<div class="thermal-reading ${maxTemp >= 80 ? 'hot' : ''}"><span>最高温度</span><strong>${fixed(maxTemp)} °C</strong></div><div class="thermal-reading"><span>最低温度</span><strong>${fixed(minTemp)} °C</strong></div><div class="thermal-note">设备上报的热传感器摘要</div>`;
   $('#component-facts').innerHTML = facts([
-    ['GPU', online && summary.gpu ? `${fixed(summary.gpu.utilization_percent)}% · ${fixed(summary.gpu.temperature_celsius)} °C` : (online ? '无数据' : '状态未知')],
-    ['电机', `${summary.motor_count || 0} 个 · ${online && summary.motor_topic_online ? '有数据' : '无实时数据'}`],
-    ['诊断', summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项异常` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '正常' : '状态未知')],
-    ['电池状态', batteryOnline ? powerStatusLabel(battery.power_supply_status) : (battery ? (online ? '未接入' : '整机已离线') : '未启用')]
+    ['GPU', online && summary.gpu ? `${fixed(summary.gpu.utilization_percent)}% · ${fixed(summary.gpu.temperature_celsius)} °C` : '暂无数据'],
+    ['电机', `${summary.motor_count || 0} 个 · ${online && summary.motor_topic_online ? '有数据' : '暂无数据'}`],
+    ['诊断', summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项异常` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '正常' : '暂无诊断')],
+    ['电池状态', batteryOnline ? powerStatusLabel(battery.power_supply_status) : (battery ? (online ? '未接入' : '设备离线') : '未启用')]
   ]);
   renderPublicHistoryControls(robot);
   if (publicHistoryIsRealtime()) {
@@ -918,6 +919,7 @@ function renderSettings() {
   $('#settings-robot-code').textContent = robot.code;
   $('#settings-robot-status').textContent = online ? '在线' : '离线';
   $('#settings-robot-status').classList.toggle('online', online);
+  $('#settings-robot-last-seen').textContent = online ? '' : `最后上报 ${formatDate(robot.last_seen)}`;
   $('#settings-robot-remark').textContent = robot.remark?.trim() || '未设置备注';
   $('#settings-identity-facts').innerHTML = facts([
     ['UUID', robot.uuid], ['型号', robot.model], ['主机名', robot.hostname], ['平台', `${robot.os}/${robot.arch}`], ['Agent 版本', robot.agent_version], ['最后上报', formatDate(robot.last_seen)]
@@ -1211,6 +1213,7 @@ function updateClock() {
       if (robot.uuid === state.selected) {
         $('#settings-robot-status').textContent = online ? '在线' : '离线';
         $('#settings-robot-status').classList.toggle('online', online);
+        $('#settings-robot-last-seen').textContent = online ? '' : `最后上报 ${formatDate(robot.last_seen)}`;
       }
     });
     return;
@@ -1227,7 +1230,8 @@ function updatePublicLiveState() {
   const selected = selectedPublicRobot();
   if (selected) {
     const online = isPublicOnline(selected);
-    $('#detail-updated-text').textContent = `采集于 ${formatDate(selected.collected_at)} · ${relativeTime(selected.last_seen)}收到`;
+    $('#robot-last-seen').textContent = online ? '' : `最后上报 ${formatDate(selected.last_seen)}`;
+    $('#detail-updated-text').textContent = online ? `采集于 ${formatDate(selected.collected_at)} · ${relativeTime(selected.last_seen)}收到` : `最后上报 ${formatDate(selected.last_seen)}`;
     $('#robot-status').textContent = online ? '在线运行' : '离线';
     $('#robot-status').classList.toggle('online', online);
     $('#detail-beacon').classList.toggle('online', online);
@@ -1253,7 +1257,7 @@ function formatDate(value) { const date = new Date(value); return Number.isNaN(d
 function relativeTime(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (!Number.isFinite(seconds)) return '-'; if (seconds < 2) return '刚刚'; if (seconds < 60) return `${seconds} 秒前`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes} 分钟前`; return `${Math.floor(minutes / 60)} 小时前`; }
 function duration(value) { if (!Number.isFinite(Number(value))) return '-'; const seconds = Math.max(0, Math.floor(Number(value))); const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.floor((seconds % 3600) / 60); return days ? `${days} 天 ${hours} 小时` : `${hours} 小时 ${minutes} 分`; }
 function fixed(value, digits = 1) { return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '-'; }
-function powerStatusLabel(value) { return ({ charging: '充电中', discharging: '放电中', not_charging: '未充电', full: '已充满' })[value] || value || '状态未知'; }
+function powerStatusLabel(value) { return ({ charging: '充电中', discharging: '放电中', not_charging: '未充电', full: '已充满' })[value] || value || '状态未提供'; }
 function bytes(value) { const number = Number(value); if (!Number.isFinite(number) || number <= 0) return '-'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; let size = number; let index = 0; while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; } return `${size.toFixed(index ? 1 : 0)} ${units[index]}`; }
 function escapeHTML(value) { return String(value ?? '').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character])); }
 function toast(message, error = false) { const element = $('#toast'); element.textContent = message; element.className = `toast show${error ? ' error' : ''}`; clearTimeout(state.toastTimer); state.toastTimer = setTimeout(() => { element.className = 'toast'; }, 2600); }
