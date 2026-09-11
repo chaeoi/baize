@@ -63,19 +63,21 @@ type PublicRobot struct {
 }
 
 type PublicSummary struct {
-	HasTelemetry     bool           `json:"has_telemetry"`
-	CPUPercent       float64        `json:"cpu_percent"`
-	MemoryPercent    float64        `json:"memory_percent"`
-	DiskPercent      float64        `json:"disk_percent"`
-	Load1            float64        `json:"load_1"`
-	UptimeSeconds    float64        `json:"uptime_seconds"`
-	TemperatureMax   *float64       `json:"temperature_max,omitempty"`
-	TemperatureMin   *float64       `json:"temperature_min,omitempty"`
-	GPU              *PublicGPU     `json:"gpu,omitempty"`
-	Battery          *PublicBattery `json:"battery,omitempty"`
-	MotorCount       int            `json:"motor_count"`
-	MotorTopicOnline bool           `json:"motor_topic_online"`
-	DiagnosticCount  int            `json:"diagnostic_count"`
+	HasTelemetry      bool           `json:"has_telemetry"`
+	CPUPercent        float64        `json:"cpu_percent"`
+	MemoryPercent     float64        `json:"memory_percent"`
+	DiskPercent       float64        `json:"disk_percent"`
+	Load1             float64        `json:"load_1"`
+	UptimeSeconds     float64        `json:"uptime_seconds"`
+	TemperatureMax    *float64       `json:"temperature_max,omitempty"`
+	TemperatureMin    *float64       `json:"temperature_min,omitempty"`
+	GPU               *PublicGPU     `json:"gpu,omitempty"`
+	Battery           *PublicBattery `json:"battery,omitempty"`
+	MotorCount        int            `json:"motor_count"`
+	MotorOnlineCount  int            `json:"motor_online_count"`
+	MotorOfflineCount int            `json:"motor_offline_count"`
+	MotorTopicOnline  bool           `json:"motor_topic_online"`
+	DiagnosticCount   int            `json:"diagnostic_count"`
 }
 
 type PublicGPU struct {
@@ -235,6 +237,13 @@ func (s *Server) publicRobotWithSamples(record RobotRecord, includeSamples bool)
 	if telemetry.Motors != nil {
 		summary.MotorCount = len(telemetry.Motors.Motors)
 		summary.MotorTopicOnline = telemetry.Motors.TopicOnline
+		if summary.MotorCount == 0 && len(telemetry.Motors.Samples) > 0 {
+			summary.MotorCount = len(telemetry.Motors.Samples[len(telemetry.Motors.Samples)-1].Motors)
+		}
+		if summary.MotorTopicOnline {
+			summary.MotorOnlineCount = summary.MotorCount
+		}
+		summary.MotorOfflineCount = summary.MotorCount - summary.MotorOnlineCount
 	}
 	collectedAt := telemetry.CollectedAt
 	online := time.Since(record.LastSeen) <= onlineAfter
@@ -247,6 +256,8 @@ func (s *Server) publicRobotWithSamples(record RobotRecord, includeSamples bool)
 			summary.Battery.Present = false
 		}
 		summary.MotorTopicOnline = false
+		summary.MotorOnlineCount = 0
+		summary.MotorOfflineCount = summary.MotorCount
 	}
 	robot := PublicRobot{
 		ID: publicRobotID(s.config.JWTSecret, record.UUID), Code: record.Code, Model: record.Model,

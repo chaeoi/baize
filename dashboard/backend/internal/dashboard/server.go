@@ -264,6 +264,15 @@ func (s *Server) raw(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, "invalid raw batch: "+err.Error())
 		return
 	}
+	// Agent ROS frames carry the robot's source clock in both timestamp fields.
+	// Use the dashboard receipt time for health and retention windows while
+	// preserving SourceTimestamp for recordings and decoded sensor time.
+	receivedAt := time.Now().UTC()
+	decodeBatch := batch
+	decodeBatch.Records = append([]rawstream.Record(nil), batch.Records...)
+	for index := range decodeBatch.Records {
+		decodeBatch.Records[index].ReceiveTimestamp = receivedAt
+	}
 	s.rawMu.Lock()
 	defer s.rawMu.Unlock()
 	status, exists := s.rawRobots[batch.RobotUUID]
@@ -271,7 +280,7 @@ func (s *Server) raw(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "sequence": batch.Sequence})
 		return
 	}
-	telemetry, err := decodeRawBatch(batch, &status)
+	telemetry, err := decodeRawBatch(decodeBatch, &status)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, "decode raw batch: "+err.Error())
 		return
