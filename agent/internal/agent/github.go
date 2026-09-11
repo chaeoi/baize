@@ -2,22 +2,36 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
+	"baize/shared/agentbinary"
 	"baize/shared/model"
 )
 
 const updateRepository = "chaeoi/baize"
+const defaultMirror = "https://gitwarp.canghai.org"
 
 type githubClient struct {
-	http *http.Client
+	http       *http.Client
+	mu         sync.Mutex
+	mirrorETag string
+	cachedURL  string
+	cachedHash string
+	cachedData []byte
 }
 
 func NewGitHubClient(httpClient *http.Client) *githubClient {
@@ -28,6 +42,13 @@ func (c *githubClient) Check(ctx context.Context, current, goos, arch string) (*
 	if goos != runtime.GOOS || arch != runtime.GOARCH {
 		return nil, fmt.Errorf("unsupported update platform %s/%s", goos, arch)
 	}
+	if update, err := c.checkMirror(ctx, current, goos, arch); err == nil {
+		return update, nil
+	}
+	return c.checkGitHub(ctx, current, goos, arch)
+}
+
+func (c *githubClient) checkGitHub(ctx context.Context, current, goos, arch string) (*model.UpdateInfo, error) {
 	assetName := "baize-agent-" + goos + "-" + arch
 	latestURL := "https://github.com/" + updateRepository + "/releases/latest/download/" + assetName
 	request, err := http.NewRequestWithContext(ctx, http.MethodHead, latestURL, nil)
@@ -93,10 +114,174 @@ func (c *githubClient) Check(ctx context.Context, current, goos, arch string) (*
 	return &model.UpdateInfo{Version: version, OS: goos, Arch: arch, SHA256: digest, URL: "https://github.com/" + updateRepository + "/releases/download/" + version + "/" + assetName}, nil
 }
 
+func (c *githubClient) checkMirror(ctx context.Context, current, goos, arch string) (*model.UpdateInfo, error) {
+	assetName := "baize-agent-" + goos + "-" + arch
+	base := strings.TrimRight(os.Getenv("BAIZE_MIRROR"), "/")
+	if base == "" {
+		base = defaultMirror
+	}
+	assetURL := base + "/github.com/" + updateRepository + "/releases/latest/download/" + assetName
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, assetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", "baize-agent/"+current)
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("mirror release returned %s", response.Status)
+	}
+	etag := response.Header.Get("ETag")
+	c.mu.Lock()
+	unchanged := etag != "" && etag == c.mirrorETag
+	c.mu.Unlock()
+	if unchanged {
+		return nil, nil
+	}
+
+	data, err := c.downloadBytes(ctx, assetURL)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(data)
+	digest := hex.EncodeToString(hash[:])
+	checksumURL := base + "/github.com/" + updateRepository + "/releases/latest/download/SHA256SUMS"
+	checksumData, err := c.downloadBytes(ctx, checksumURL)
+	if err != nil {
+		return nil, err
+	}
+	if checksum := checksumForAsset(checksumData, assetName); checksum == "" || checksum != digest {
+		return nil, fmt.Errorf("mirror release checksum mismatch for %s", assetName)
+	}
+	if err := validateCandidate(data, goos, arch); err != nil {
+		return nil, err
+	}
+	version, err := candidateVersion(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.mirrorETag = etag
+	if version != "" && isNewerVersion(version, current) {
+		c.cachedURL, c.cachedHash, c.cachedData = assetURL, digest, data
+	}
+	c.mu.Unlock()
+	if !isNewerVersion(version, current) {
+		return nil, nil
+	}
+	return &model.UpdateInfo{Version: version, OS: goos, Arch: arch, SHA256: digest, Size: int64(len(data)), URL: assetURL}, nil
+}
+
+func (c *githubClient) downloadBytes(ctx context.Context, address string) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", "baize-agent/update")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("mirror download returned %s", response.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, 128<<20+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 128<<20 {
+		return nil, fmt.Errorf("mirror download exceeds 128 MiB")
+	}
+	return data, nil
+}
+
+func validateCandidate(data []byte, goos, arch string) error {
+	temporary, err := os.CreateTemp("", ".baize-update-check-*")
+	if err != nil {
+		return err
+	}
+	path := temporary.Name()
+	defer os.Remove(path)
+	if err := temporary.Chmod(0o700); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return agentbinary.Validate(path, goos, arch)
+}
+
+func candidateVersion(ctx context.Context, data []byte) (string, error) {
+	temporary, err := os.CreateTemp("", ".baize-update-version-*")
+	if err != nil {
+		return "", err
+	}
+	path := temporary.Name()
+	defer os.Remove(path)
+	if err := temporary.Chmod(0o700); err != nil {
+		temporary.Close()
+		return "", err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(checkCtx, path, "--version").Output()
+	if err != nil {
+		return "", fmt.Errorf("read candidate Agent version: %w", err)
+	}
+	version := strings.TrimSpace(string(output))
+	if version == "" {
+		return "", fmt.Errorf("candidate Agent returned an empty version")
+	}
+	return version, nil
+}
+
+func checksumForAsset(data []byte, asset string) string {
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) >= 2 && strings.TrimPrefix(fields[1], "*") == asset && len(fields[0]) == 64 {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
 func (c *githubClient) Download(ctx context.Context, update model.UpdateInfo, writer io.Writer) error {
+	c.mu.Lock()
+	if c.cachedURL == update.URL && c.cachedHash == update.SHA256 && len(c.cachedData) > 0 {
+		data := append([]byte(nil), c.cachedData...)
+		c.cachedURL, c.cachedHash, c.cachedData = "", "", nil
+		c.mu.Unlock()
+		_, err := io.Copy(writer, bytes.NewReader(data))
+		return err
+	}
+	c.mu.Unlock()
 	parsed, err := url.Parse(update.URL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host != "github.com" {
-		return fmt.Errorf("GitHub returned an invalid update URL")
+	if err != nil || parsed == nil || parsed.Scheme != "https" || parsed.Host != "github.com" {
+		mirror := strings.TrimRight(os.Getenv("BAIZE_MIRROR"), "/")
+		if mirror == "" {
+			mirror = defaultMirror
+		}
+		mirrorURL, mirrorErr := url.Parse(mirror)
+		if mirrorErr != nil || mirrorURL == nil || mirrorURL.Scheme != "https" || parsed == nil || parsed.Scheme != "https" || parsed.Host != mirrorURL.Host {
+			return fmt.Errorf("update source returned an invalid update URL")
+		}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, update.URL, nil)
 	if err != nil {

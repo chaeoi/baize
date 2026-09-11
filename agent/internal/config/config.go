@@ -103,6 +103,9 @@ type UpdateConfig struct {
 type fileUpdateConfig struct {
 	Enabled       bool     `yaml:"enabled"`
 	CheckInterval Duration `yaml:"check_interval"`
+	// Automatic was emitted by older Agent releases. Keep accepting it so an
+	// upgrade can preserve the existing identity and collection settings.
+	Automatic bool `yaml:"automatic,omitempty"`
 }
 
 // fileConfig deliberately excludes motor and BMS sections. Robot capability is
