@@ -323,7 +323,7 @@ func (s *Store) latestHistoryTelemetry(record RobotRecord) (model.Telemetry, boo
 		telemetry.GPUs = []model.GPUMetrics{gpu}
 	}
 	if point.BatterySOC != nil || point.BatteryVoltage != nil || point.BatteryCurrent != nil || point.BatteryTemperature != nil {
-		battery := &model.BMSMetrics{Enabled: true, Online: true}
+		battery := &model.BMSMetrics{Enabled: true, Online: false}
 		if point.BatterySOC != nil {
 			battery.SOCPercent = *point.BatterySOC
 		}
@@ -342,7 +342,7 @@ func (s *Store) latestHistoryTelemetry(record RobotRecord) (model.Telemetry, boo
 		telemetry.BMS = battery
 	}
 	if point.MotorCount > 0 || len(point.Motors) > 0 {
-		motors := &model.MotorSnapshot{Enabled: true, Source: "history", TopicOnline: point.MotorTopicOnline, SampledAt: point.At, Motors: make([]model.MotorState, len(point.Motors))}
+		motors := &model.MotorSnapshot{Enabled: true, Source: "history", TopicOnline: false, SampledAt: point.At, Motors: make([]model.MotorState, len(point.Motors))}
 		for index, motor := range point.Motors {
 			motors.Motors[index] = model.MotorState{ID: motor.ID, Label: motor.Label, PositionRad: motor.PositionRad, VelocityRadPerSec: motor.VelocityRadPerSec, TorqueNm: motor.TorqueNm}
 		}

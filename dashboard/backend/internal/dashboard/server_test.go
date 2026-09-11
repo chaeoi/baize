@@ -213,6 +213,31 @@ func TestTokenFingerprintDoesNotExposeToken(t *testing.T) {
 	}
 }
 
+func TestPublicRobotMarksRetainedComponentsOfflineWithRobot(t *testing.T) {
+	server := &Server{config: ServerConfig{JWTSecret: "jwt-secret-long-enough-for-tests-123456"}}
+	record := RobotRecord{
+		UUID: "52446a60-7483-4ba7-b8c7-b85f60b2a00f", Code: "M99",
+		LastSeen: time.Now().UTC().Add(-2 * onlineAfter),
+		Telemetry: model.Telemetry{
+			BMS:    &model.BMSMetrics{Enabled: true, Online: true, Present: true, SOCPercent: 80},
+			Motors: &model.MotorSnapshot{Enabled: true, TopicOnline: true, Motors: []model.MotorState{{ID: "hip"}}},
+		},
+	}
+	public := server.publicRobot(record)
+	if public.Online || public.Summary.Battery == nil || public.Summary.Battery.Online || public.Summary.Battery.Present || public.Summary.MotorTopicOnline {
+		t.Fatalf("retained component reported live with offline robot: %+v", public)
+	}
+}
+
+func TestPublicRobotKeepsPresentBatteryOnlineOnlyWhenExplicitlyPresent(t *testing.T) {
+	server := &Server{config: ServerConfig{JWTSecret: "jwt-secret-long-enough-for-tests-123456"}}
+	record := RobotRecord{UUID: "52446a60-7483-4ba7-b8c7-b85f60b2a00f", Code: "M99", LastSeen: time.Now().UTC(), Telemetry: model.Telemetry{CollectedAt: time.Now().UTC(), BMS: &model.BMSMetrics{Enabled: true, Online: true, Present: false, SOCPercent: 80}}}
+	public := server.publicRobot(record)
+	if public.Summary.Battery == nil || !public.Summary.Battery.Online || public.Summary.Battery.Present {
+		t.Fatalf("battery presence was changed while robot is online: %+v", public.Summary.Battery)
+	}
+}
+
 func TestPublicHistoryIsCrossOriginAndRedacted(t *testing.T) {
 	store := newTestStore(t)
 	uuid := "52446a60-7483-4ba7-b8c7-b85f60b2a00f"

@@ -15,9 +15,9 @@ import (
 )
 
 type rawRobotState struct {
-	sequence                   uint64
-	motorReceived, bmsReceived time.Time
-	hostUpdated                bool
+	sequence                                  uint64
+	batchReceived, motorReceived, bmsReceived time.Time
+	hostUpdated                               bool
 }
 
 // ROS receipt times track topic health independently of simulated ROS clocks.
@@ -83,6 +83,7 @@ func decodeRawBatch(batch rawstream.Batch, status *rawRobotState) (model.Telemet
 	if latestAt.IsZero() {
 		latestAt = time.Now().UTC()
 	}
+	status.batchReceived = latestAt
 	telemetry.Motors = latestMotors
 	if latestMotors != nil && len(latestMotors.Samples) > 1 {
 		duration := latestMotors.Samples[len(latestMotors.Samples)-1].At.Sub(latestMotors.Samples[0].At).Seconds()
@@ -113,7 +114,7 @@ func mergeRawTelemetry(previous, current model.Telemetry, status rawRobotState) 
 		} else if profile.BMS.Enabled {
 			current.BMS = &model.BMSMetrics{Enabled: true, Interface: profile.BMS.Topic, Protocol: profile.BMS.Protocol}
 		}
-		if current.BMS != nil && current.CollectedAt.Sub(status.bmsReceived) > profile.BMS.ReadTimeout.Value() {
+		if current.BMS != nil && status.batchReceived.Sub(status.bmsReceived) > profile.BMS.ReadTimeout.Value() {
 			current.BMS.Online = false
 			current.BMS.Present = false
 		}
@@ -126,7 +127,7 @@ func mergeRawTelemetry(previous, current model.Telemetry, status rawRobotState) 
 		} else if profile.Motor.Enabled {
 			current.Motors = &model.MotorSnapshot{Enabled: true, Source: "ros2_joint_state", Topic: profile.Motor.Topic}
 		}
-		if current.Motors != nil && current.CollectedAt.Sub(status.motorReceived) > profile.Motor.ReadTimeout.Value() {
+		if current.Motors != nil && status.batchReceived.Sub(status.motorReceived) > profile.Motor.ReadTimeout.Value() {
 			current.Motors.TopicOnline = false
 		}
 	}
