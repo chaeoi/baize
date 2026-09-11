@@ -79,6 +79,27 @@ func TestStoreSeparatesControlAndHistoryAndKeepsOfflineRobots(t *testing.T) {
 	}
 }
 
+func TestNormalizeMotorSampleTimesAnchorsStaleBatch(t *testing.T) {
+	receivedAt := time.Now().UTC().Truncate(time.Millisecond)
+	snapshot := &model.MotorSnapshot{Samples: []model.MotorSample{
+		{At: receivedAt.Add(-time.Hour - 2*time.Second)},
+		{At: receivedAt.Add(-time.Hour)},
+	}}
+	normalizeMotorSampleTimes(snapshot, receivedAt)
+	if !snapshot.Samples[1].At.Equal(receivedAt) {
+		t.Fatalf("latest sample = %v, want %v", snapshot.Samples[1].At, receivedAt)
+	}
+	if got := snapshot.Samples[1].At.Sub(snapshot.Samples[0].At); got != 2*time.Second {
+		t.Fatalf("sample spacing = %v, want 2s", got)
+	}
+
+	recent := &model.MotorSnapshot{Samples: []model.MotorSample{{At: receivedAt.Add(-time.Second)}}}
+	normalizeMotorSampleTimes(recent, receivedAt)
+	if !recent.Samples[0].At.Equal(receivedAt.Add(-time.Second)) {
+		t.Fatalf("recent sample was unexpectedly shifted: %v", recent.Samples[0].At)
+	}
+}
+
 func TestStoreRoundTripsComplete500HzMotorBatch(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root+"/control", root+"/history", StoreOptions{AdminUser: "admin", BootstrapPassword: "Baize@Admin1"})
