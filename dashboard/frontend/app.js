@@ -414,7 +414,7 @@ function renderRobotList() {
         ${metric('磁盘', online && summary.has_telemetry ? `${fixed(summary.disk_percent)}%` : '--', online && summary.has_telemetry ? '根目录' : '暂无数据', online && summary.has_telemetry ? summary.disk_percent : NaN)}
         ${metric('电池', batteryOnline ? `${fixed(battery.soc_percent)}%` : '--', battery ? (batteryOnline ? `${fixed(battery.voltage)} V` : (online ? '暂无数据' : '设备离线')) : '未接入', batteryOnline ? battery.soc_percent : NaN)}
       </div>
-      <footer><span>${online && summary.gpu ? `GPU ${fixed(summary.gpu.utilization_percent)}%` : 'GPU 暂无数据'}</span><span>${summary.motor_count || 0} 个电机 · ${online && summary.motor_topic_online ? '有数据' : '暂无数据'}</span><span class="robot-card-diagnostic ${summary.diagnostic_count && online ? 'has-alert' : ''}">${summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项诊断` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '诊断正常' : '暂无诊断')}</span></footer>
+      <footer><span>${online && summary.gpu ? `GPU ${fixed(summary.gpu.utilization_percent)}%` : 'GPU 暂无数据'}</span><span>${motorStatusText(summary, online)}</span><span class="robot-card-diagnostic ${summary.diagnostic_count && online ? 'has-alert' : ''}">${summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项诊断` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '诊断正常' : '暂无诊断')}</span></footer>
     </a>`;
   }).join('') || '<div class="empty-line">没有匹配设备</div>';
   $$('#robot-list .robot-card').forEach((card) => card.addEventListener('click', (event) => {
@@ -449,7 +449,7 @@ function renderPublicDetail(robot) {
   $('#thermal-summary').innerHTML = !online || maxTemp === undefined ? '<div class="empty-line">暂无温度数据</div>' : `<div class="thermal-reading ${maxTemp >= 80 ? 'hot' : ''}"><span>最高温度</span><strong>${fixed(maxTemp)} °C</strong></div><div class="thermal-reading"><span>最低温度</span><strong>${fixed(minTemp)} °C</strong></div><div class="thermal-note">设备上报的热传感器摘要</div>`;
   $('#component-facts').innerHTML = facts([
     ['GPU', online && summary.gpu ? `${fixed(summary.gpu.utilization_percent)}% · ${fixed(summary.gpu.temperature_celsius)} °C` : '暂无数据'],
-    ['电机', `${summary.motor_count || 0} 个 · ${online && summary.motor_topic_online ? '有数据' : '暂无数据'}`],
+    ['电机', motorStatusText(summary, online)],
     ['诊断', summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项异常` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '正常' : '暂无诊断')],
     ['电池状态', batteryOnline ? powerStatusLabel(battery.power_supply_status) : (battery ? (online ? '未接入' : '设备离线') : '未启用')]
   ]);
@@ -1188,6 +1188,12 @@ function selectedAdminRobot() { return state.robots.find((robot) => robot.uuid =
 function robotKey(robot, mode) { return mode === 'admin' ? robot.uuid : robot.id; }
 function isPublicOnline(robot) { return Boolean(robot.online) && Date.now() - Date.parse(robot.last_seen) <= 12000; }
 function isAdminOnline(robot) { return Date.now() - Date.parse(robot.last_seen) <= 12000; }
+function motorStatusText(summary, online) {
+  const count = Number(summary?.motor_count) || 0;
+  if (!online) return count ? `${count} 个离线` : '设备离线';
+  if (!count) return '暂无数据';
+  return `${count} 个在线`;
+}
 
 function setMetric(name, value, display, sub) {
   const safe = Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Number(value))) : 0;

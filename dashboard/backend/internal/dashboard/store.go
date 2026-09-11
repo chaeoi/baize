@@ -383,6 +383,7 @@ func (s *Store) PutTelemetry(telemetry model.Telemetry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
+	normalizeMotorSampleTimes(telemetry.Motors, now)
 	identity := telemetry.Robot
 	_, err := s.control.Exec(`INSERT INTO robots(uuid, code, model, hostname, os, arch, agent_version, first_seen, last_seen) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(uuid) DO UPDATE SET code=excluded.code, model=excluded.model, hostname=excluded.hostname, os=excluded.os, arch=excluded.arch, agent_version=excluded.agent_version, last_seen=excluded.last_seen`, identity.UUID, identity.Code, identity.Model, identity.Hostname, identity.OS, identity.Arch, telemetry.AgentVersion, now.UnixNano(), now.UnixNano())
 	if err != nil {
@@ -514,6 +515,33 @@ func (s *Store) insertFastMotorHistory(uuid string, telemetry model.Telemetry, r
 	return s.tsdb.WriteMotorSamples(uuid, telemetry.Motors.Samples)
 }
 
+// Raw ROS samples can carry a robot clock that is far behind the dashboard
+// clock. Keep their relative spacing, but anchor an obviously stale batch at
+// the time it was received so the short motor history window remains usable.
+func normalizeMotorSampleTimes(snapshot *model.MotorSnapshot, receivedAt time.Time) {
+	if snapshot == nil || len(snapshot.Samples) == 0 || receivedAt.IsZero() {
+		return
+	}
+	latest := time.Time{}
+	for _, sample := range snapshot.Samples {
+		if sample.At.After(latest) {
+			latest = sample.At
+		}
+	}
+	if latest.IsZero() {
+		for index := range snapshot.Samples {
+			snapshot.Samples[index].At = receivedAt
+		}
+		return
+	}
+	delta := receivedAt.Sub(latest)
+	if delta > fastMotorRetention/2 || delta < -fastMotorRetention/2 {
+		for index := range snapshot.Samples {
+			snapshot.Samples[index].At = snapshot.Samples[index].At.Add(delta)
+		}
+	}
+}
+
 func makeHistoryPoint(telemetry model.Telemetry) HistoryPoint {
 	at := telemetry.CollectedAt
 	if at.IsZero() {
@@ -580,6 +608,32 @@ func (s *Store) fastMotorHistory(uuid string, from, to time.Time, limit int, mot
 	points, err := s.tsdb.fastMotorHistory(uuid, from, to, limit, motorID)
 	if err != nil {
 		return nil, err
+	}
+	if len(points) == 0 {
+		// Older agents may have supplied motor snapshots without usable sample
+		// timestamps. Host history still carries the same motor values at the
+		// dashboard collection time, so use it as a short-window fallback.
+		points, err = s.tsdb.hostHistory(uuid, from, to, limit, true)
+		if err != nil {
+			return nil, err
+		}
+		if motorID != "" {
+			filtered := make([]HistoryPoint, 0, len(points))
+			for _, point := range points {
+				motors := make([]MotorHistoryPoint, 0, 1)
+				for _, motor := range point.Motors {
+					if motor.ID == motorID {
+						motors = append(motors, motor)
+					}
+				}
+				if len(motors) > 0 {
+					point.Motors = motors
+					point.MotorCount = len(motors)
+					filtered = append(filtered, point)
+				}
+			}
+			points = filtered
+		}
 	}
 	labels := make(map[string]string)
 	s.mu.RLock()
