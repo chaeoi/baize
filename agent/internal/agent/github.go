@@ -266,6 +266,9 @@ func (c *githubClient) Download(ctx context.Context, update model.UpdateInfo, wr
 	c.mu.Lock()
 	if c.cachedURL == update.URL && c.cachedHash == update.SHA256 && len(c.cachedData) > 0 {
 		data := append([]byte(nil), c.cachedData...)
+		// Force the next check to refresh the candidate after it is consumed.
+		// This permits a retry when handoff or process replacement fails.
+		c.mirrorETag = ""
 		c.cachedURL, c.cachedHash, c.cachedData = "", "", nil
 		c.mu.Unlock()
 		_, err := io.Copy(writer, bytes.NewReader(data))
