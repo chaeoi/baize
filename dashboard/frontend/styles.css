@@ -135,6 +135,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 .status-beacon { width: 10px; height: 10px; flex: 0 0 auto; }
 .title-line { display: flex; align-items: center; gap: 9px; }
 .title-line h1 { margin: 0; font-size: 26px; line-height: 1; }
+.status-last-seen { color: var(--muted); font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .detail-title p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 .status-label { display: inline-flex; align-items: center; min-height: 21px; padding: 0 7px; color: #68757e; background: #edf1f2; border-radius: 4px; font-size: 11px; font-weight: 800; }
 .status-label.online { color: #087b59; background: var(--green-soft); }
@@ -217,6 +218,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 .settings-robot-title h2 { margin: 4px 0 8px; font-size: 24px; }
 .settings-title-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .settings-title-meta > span:last-child { max-width: min(52vw, 420px); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.settings-title-meta .status-last-seen { max-width: none; font-size: 11px; }
 .title-actions { display: flex; align-items: center; gap: 4px; }
 .danger-icon { color: var(--red); }
 .danger-icon:hover { color: #a72d38; background: var(--red-soft); }
