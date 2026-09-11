@@ -102,7 +102,7 @@ else
 fi
 download_base() {
 	base=$1
-	curl --fail --location --retry 4 --retry-delay 2 --retry-all-errors --silent --show-error "$base/$repo/$path/$2" \
+	curl --fail --location --retry 4 --retry-delay 2 --retry-all-errors --silent --show-error "$base/$repo/$path/$2?download=1" \
 		-o "$tmp_dir/$2"
 }
 download_release() {

@@ -120,7 +120,7 @@ func (c *githubClient) checkMirror(ctx context.Context, current, goos, arch stri
 	if base == "" {
 		base = defaultMirror
 	}
-	assetURL := base + "/github.com/" + updateRepository + "/releases/latest/download/" + assetName
+	assetURL := base + "/github.com/" + updateRepository + "/releases/latest/download/" + assetName + "?download=1"
 	request, err := http.NewRequestWithContext(ctx, http.MethodHead, assetURL, nil)
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func (c *githubClient) checkMirror(ctx context.Context, current, goos, arch stri
 	}
 	hash := sha256.Sum256(data)
 	digest := hex.EncodeToString(hash[:])
-	checksumURL := base + "/github.com/" + updateRepository + "/releases/latest/download/SHA256SUMS"
+	checksumURL := base + "/github.com/" + updateRepository + "/releases/latest/download/SHA256SUMS?download=1"
 	checksumData, err := c.downloadBytes(ctx, checksumURL)
 	if err != nil {
 		return nil, err
