@@ -1,8 +1,6 @@
 package dashboard
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -28,17 +26,15 @@ import (
 	"time"
 	"unicode"
 
-	"baize/shared/model"
+	"baize/shared/rawstream"
 )
 
 const (
-	maxTelemetryBytes           = 32 << 20
-	maxCompressedTelemetryBytes = 16 << 20
-	fastMotorHistoryLimit       = 32_000
-	historyPointLimit           = 400_000
-	publicHostSampleRateHz      = 0.5
-	publicAllMotorSampleRateHz  = 20.0
-	publicSingleSampleRateHz    = 500.0
+	fastMotorHistoryLimit      = 32_000
+	historyPointLimit          = 400_000
+	publicHostSampleRateHz     = 0.5
+	publicAllMotorSampleRateHz = 20.0
+	publicSingleSampleRateHz   = 500.0
 )
 
 var (
@@ -51,6 +47,7 @@ type ServerConfig struct {
 	AdminUser    string
 	JWTSecret    string
 	FrontendDir  string
+	RecordingDir string
 	CookieSecure bool
 }
 
@@ -61,6 +58,9 @@ type Server struct {
 	loginAttempts map[string]loginAttempt
 	publicStream  *streamHub
 	adminStream   *streamHub
+	recordings    *recordingManager
+	rawMu         sync.Mutex
+	rawRobots     map[string]rawRobotState
 	mu            sync.Mutex
 	handler       http.Handler
 }
@@ -74,6 +74,12 @@ func NewServer(cfg ServerConfig, store *Store) *Server {
 	server := &Server{
 		config: cfg, store: store, sessions: make(map[string]time.Time), loginAttempts: make(map[string]loginAttempt),
 		publicStream: newStreamHub(), adminStream: newStreamHub(),
+		rawRobots: make(map[string]rawRobotState),
+	}
+	var err error
+	server.recordings, err = newRecordingManager(cfg.RecordingDir)
+	if err != nil {
+		slog.Error("open recording storage", "error", err)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.health)
@@ -82,8 +88,9 @@ func NewServer(cfg ServerConfig, store *Store) *Server {
 	mux.HandleFunc("/api/v1/admin/agent-token", server.requireAdmin(server.agentToken))
 	mux.HandleFunc("/api/v1/robots", server.robots)
 	mux.HandleFunc("/api/v1/robots/", server.publicRobotAction)
+	mux.HandleFunc("/api/v1/recordings/", server.requireAdmin(server.recordingAction))
 	mux.HandleFunc("/api/v1/ws/robots", server.publicRobotStream)
-	mux.HandleFunc("/api/v1/telemetry", server.requireAgent(server.telemetry))
+	mux.HandleFunc("/api/v1/raw", server.requireAgent(server.raw))
 	mux.HandleFunc("/api/v1/admin/robots", server.requireAdmin(server.adminRobots))
 	mux.HandleFunc("/api/v1/admin/robots/", server.requireAdmin(server.robotAction))
 	mux.HandleFunc("/api/v1/admin/ws/robots", server.requireAdmin(server.adminRobotStream))
@@ -116,6 +123,8 @@ func (s *Server) frontend(writer http.ResponseWriter, request *http.Request) {
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	s.handler.ServeHTTP(writer, request)
 }
+
+func (s *Server) Close() error { return s.recordings.Close() }
 
 func (s *Server) health(writer http.ResponseWriter, _ *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "go_version": runtime.Version()})
@@ -239,25 +248,47 @@ func (s *Server) startSession(writer http.ResponseWriter, request *http.Request)
 	return nil
 }
 
-func (s *Server) telemetry(writer http.ResponseWriter, request *http.Request) {
+func (s *Server) raw(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		methodNotAllowed(writer)
 		return
 	}
-	var telemetry model.Telemetry
-	if err := decodeTelemetryJSON(writer, request, &telemetry); err != nil {
+	request.Body = http.MaxBytesReader(writer, request.Body, 80<<20)
+	data, err := io.ReadAll(request.Body)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "read raw batch")
 		return
 	}
-	if telemetry.SchemaVersion != model.SchemaVersion || !uuidPattern.MatchString(telemetry.Robot.UUID) || telemetry.Robot.Code == "" {
-		writeError(writer, http.StatusBadRequest, "invalid telemetry identity or schema")
+	batch, err := rawstream.Decode(data)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid raw batch: "+err.Error())
 		return
 	}
+	s.rawMu.Lock()
+	defer s.rawMu.Unlock()
+	status, exists := s.rawRobots[batch.RobotUUID]
+	if exists && batch.Sequence <= status.sequence {
+		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "sequence": batch.Sequence})
+		return
+	}
+	telemetry, err := decodeRawBatch(batch, &status)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "decode raw batch: "+err.Error())
+		return
+	}
+	previous, _ := s.store.Robot(batch.RobotUUID)
+	telemetry = mergeRawTelemetry(previous.Telemetry, telemetry, status)
 	if err := s.store.PutTelemetry(telemetry); err != nil {
-		writeError(writer, http.StatusInternalServerError, "store telemetry")
+		writeError(writer, http.StatusInternalServerError, "store raw telemetry")
 		return
 	}
-	s.broadcastRobot(telemetry.Robot.UUID)
-	writeJSON(writer, http.StatusOK, map[string]bool{"ok": true})
+	if err := s.recordings.IngestEncoded(batch, data); err != nil {
+		slog.Error("record raw batch", "robot_uuid", batch.RobotUUID, "error", err)
+	}
+	status.sequence = batch.Sequence
+	s.rawRobots[batch.RobotUUID] = status
+	s.broadcastRobot(batch.RobotUUID)
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "sequence": batch.Sequence, "records": len(batch.Records)})
 }
 
 func (s *Server) robots(writer http.ResponseWriter, request *http.Request) {
@@ -693,30 +724,6 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, limit int64) error {
 	request.Body = http.MaxBytesReader(writer, request.Body, limit)
 	return decodeJSONReader(writer, request.Body, target)
-}
-
-func decodeTelemetryJSON(writer http.ResponseWriter, request *http.Request, target any) error {
-	if strings.EqualFold(strings.TrimSpace(request.Header.Get("Content-Encoding")), "gzip") {
-		request.Body = http.MaxBytesReader(writer, request.Body, maxCompressedTelemetryBytes)
-		compressed, err := gzip.NewReader(request.Body)
-		if err != nil {
-			writeError(writer, http.StatusBadRequest, "invalid gzip telemetry")
-			return err
-		}
-		defer compressed.Close()
-		data, err := io.ReadAll(io.LimitReader(compressed, maxTelemetryBytes+1))
-		if err != nil {
-			writeError(writer, http.StatusBadRequest, "invalid telemetry body")
-			return err
-		}
-		if int64(len(data)) > maxTelemetryBytes {
-			err := errors.New("telemetry body is too large")
-			writeError(writer, http.StatusRequestEntityTooLarge, err.Error())
-			return err
-		}
-		return decodeJSONReader(writer, bytes.NewReader(data), target)
-	}
-	return decodeJSON(writer, request, target, maxTelemetryBytes)
 }
 
 func decodeJSONReader(writer http.ResponseWriter, reader io.Reader, target any) error {

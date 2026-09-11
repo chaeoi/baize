@@ -10,6 +10,7 @@ on:
       - dashboard/frontend/**
       - dashboard/config.yml.example
       - shared/model/**
+      - shared/rawstream/**
       - shared/robotmodel/**
       - .github/workflows/docker-publish.yml
   pull_request:
@@ -21,6 +22,7 @@ on:
       - dashboard/frontend/**
       - dashboard/config.yml.example
       - shared/model/**
+      - shared/rawstream/**
       - shared/robotmodel/**
       - .github/workflows/docker-publish.yml
   workflow_dispatch:
@@ -48,7 +50,7 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
-          dashboard_paths=(go.mod go.sum dashboard/backend dashboard/frontend dashboard/config.yml.example shared/model shared/robotmodel .github/workflows/docker-publish.yml)
+          dashboard_paths=(go.mod go.sum dashboard/backend dashboard/frontend dashboard/config.yml.example shared/model shared/rawstream shared/robotmodel .github/workflows/docker-publish.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${dashboard_paths[@]}")"
           version="$(date -u -d "$commit_date" +%Y%m%d)"
           image_name="${DOCKERHUB_USERNAME:-${GITHUB_REPOSITORY_OWNER,,}}/baize"

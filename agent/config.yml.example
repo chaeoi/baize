@@ -7,6 +7,8 @@ agent:
   token: "replace-with-dashboard-agent-token"
   report_interval: "2s"
   http_timeout: "10s"
+  raw_batch_interval: "2s"
+  raw_cache_bytes: 268435456
 
 system:
   enabled: true

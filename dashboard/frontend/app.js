@@ -38,7 +38,8 @@ const PUBLIC_SINGLE_MOTOR_SAMPLE_RATE_HZ = 500;
 const PUBLIC_HISTORY_MODES = new Set(['host', 'motors', 'single']);
 const PUBLIC_HISTORY_METRICS = new Set(['torque_nm', 'velocity_rad_per_sec', 'position_rad']);
 let publicRecorder = null;
-let publicRecordingDatabasePromise = null;
+let recordingRequestVersion = 0;
+let recordingStatusPending = false;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -54,15 +55,22 @@ document.addEventListener('DOMContentLoaded', boot);
 async function boot() {
   renderIcons();
   bindEvents();
-  window.addEventListener('pagehide', flushPublicRecording);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushPublicRecording(); });
   updateClock();
   window.setInterval(updateClock, 1000);
+  window.setInterval(refreshRecordingStatus, 2000);
   if (dashboardPath) {
     await bootDashboard();
     return;
   }
   state.view = 'display';
+  try {
+    const session = await api('/api/v1/session');
+    state.authenticated = Boolean(session.authenticated);
+    state.passwordChangeRequired = Boolean(session.password_change_required);
+    state.adminUser = session.username || 'admin';
+  } catch {
+    state.authenticated = false;
+  }
   applyPublicRoute(publicRouteFromLocation());
   replacePublicRoute();
   showApp();
@@ -267,7 +275,7 @@ function openStream(mode, publicOptions = null) {
   });
   socket.addEventListener('message', (event) => {
     if (state.stream !== socket) return;
-    try { receiveEvent(JSON.parse(event.data), mode, event.data); } catch { setConnection('error', '数据格式错误'); }
+    try { receiveEvent(JSON.parse(event.data), mode); } catch { setConnection('error', '数据格式错误'); }
   });
   socket.addEventListener('error', () => {
     if (state.stream === socket) setConnection('error', '实时通道异常');
@@ -322,7 +330,7 @@ function scheduleReconnect() {
   }, delay);
 }
 
-function receiveEvent(event, mode, rawEvent = '') {
+function receiveEvent(event, mode) {
   state.latestEventAt = Date.now();
   if (mode === 'public' && publicHistoryIsRealtime()) updatePublicRealtimeClock(event.server_time);
   if (event.type === 'snapshot') state.robots = event.robots || [];
@@ -336,7 +344,6 @@ function receiveEvent(event, mode, rawEvent = '') {
     if (index === -1) state.robots.push(event.robot);
     else state.robots[index] = event.robot;
     if (mode === 'public' && state.selected === event.robot.id) {
-      recordPublicTelemetry(rawEvent, event.robot);
       if (publicHistoryIsRealtime() && state.publicHistoryMode === 'host') appendPublicHostSample(event.robot);
       if (publicHistoryIsRealtime() && state.publicHistoryMode !== 'host') appendPublicMotorSamples(event.robot);
     }
@@ -555,7 +562,7 @@ function firstPublicMotorID() {
 
 function openPublicRobot(id) {
   if (!id || state.selected === id) return;
-  stopPublicRecording();
+  publicRecorder = null;
   applyPublicRoute({ id, ...defaultPublicHistoryRoute() });
   resetPublicHistory();
   pushPublicRoute();
@@ -564,7 +571,7 @@ function openPublicRobot(id) {
 }
 
 function showFleet(replace = false) {
-  stopPublicRecording();
+  publicRecorder = null;
   applyPublicRoute({ id: null, ...defaultPublicHistoryRoute() });
   resetPublicHistory();
   updatePublicRoute(replace);
@@ -581,7 +588,7 @@ function syncPublicRoute() {
     || route.motor !== state.publicHistoryMotor;
   const metricChanged = route.metric !== state.publicHistoryMetric;
   if (robotChanged) {
-    stopPublicRecording();
+    publicRecorder = null;
   }
   if (robotChanged || dataChanged) resetPublicHistory();
   applyPublicRoute(route);
@@ -622,15 +629,25 @@ function renderPublicHistoryControls() {
   $('#public-history-fixed-range').classList.add('hidden');
   $('#public-recording-indicator').classList.toggle('hidden', !publicRecorder?.active);
   const recordButton = $('#public-record-button');
+  const recordingAllowed = state.authenticated && !state.passwordChangeRequired;
+  recordButton.classList.toggle('hidden', !recordingAllowed);
+  $('#public-download-button').classList.toggle('hidden', !recordingAllowed);
   const selected = selectedPublicRobot();
-  recordButton.disabled = !selected;
+  recordButton.disabled = !selected || !publicRecorder || Boolean(publicRecorder.pending || publicRecorder.stopping);
   recordButton.title = publicRecorder?.active ? '停止录制' : '开始录制';
   recordButton.setAttribute('aria-label', recordButton.title);
   recordButton.classList.toggle('recording', Boolean(publicRecorder?.active));
-  recordButton.innerHTML = publicRecorder?.active
+  recordButton.innerHTML = publicRecorder?.stopping
+    ? '<i data-lucide="loader"></i><span>等待缓存补齐</span>' : publicRecorder?.active
     ? '<i data-lucide="square"></i><span>停止录制</span>'
+    : publicRecorder?.error ? '<i data-lucide="rotate-cw"></i><span>重试录制</span>'
     : '<i data-lucide="circle"></i><span>开始录制</span>';
-  $('#public-download-button').disabled = !publicRecorder || (!publicRecorder.active && !publicRecorder.hasData);
+  $('#public-download-button').disabled = !publicRecorder?.hasData || publicRecorder.active || publicRecorder.pending || publicRecorder.stopping;
+  const recordingError = $('#public-recording-error');
+  recordingError.textContent = publicRecorder?.error ? `录制已中断：${publicRecorder.error}` : '';
+  recordingError.classList.toggle('hidden', !recordingAllowed || !publicRecorder?.error);
+  if (publicRecorder?.error) recordButton.title = publicRecorder.error;
+  recordButton.setAttribute('aria-label', recordButton.title);
   $$('[data-public-mode]').forEach((button) => button.classList.toggle('active', button.dataset.publicMode === state.publicHistoryMode));
   renderIcons();
 }
@@ -651,9 +668,8 @@ function publicHistoryIsRealtime() { return (state.publicHistoryMode === 'single
 function publicStreamOptionsForCurrent() {
   const robot = selectedPublicRobot();
   if (!robot) return null;
-  const recording = publicRecorder?.active && publicRecorder.robotID === robot.id;
-  if (!recording && !publicHistoryIsRealtime()) return null;
-  return { includeSamples: true, robotID: robot.id, motorID: !recording && state.publicHistoryMode === 'single' ? state.publicHistoryMotor : '' };
+  if (!publicHistoryIsRealtime()) return null;
+  return { includeSamples: true, robotID: robot.id, motorID: state.publicHistoryMode === 'single' ? state.publicHistoryMotor : '' };
 }
 
 function syncPublicStream() {
@@ -847,178 +863,48 @@ function realtimeSampleCutoff() {
   return state.publicRealtimeStartedAt + (state.publicRealtimeClockOffset || 0);
 }
 
-function startPublicRecording(robotID) {
-  if (publicRecorder?.active && publicRecorder.robotID === robotID) return;
-  stopPublicRecording();
-  publicRecorder = {
-    id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    robotID,
-    startedAt: new Date().toISOString(),
-    active: true,
-    hasData: false,
-    index: 0,
-    pending: [],
-    chunks: [],
-    writePromise: Promise.resolve(),
-  };
-  renderPublicHistoryControls();
+// Recording is owned by the backend and survives page navigation/reloads.
+// Browsers fetch only its small status, never the raw recording stream.
+async function refreshRecordingStatus() {
+  const robotID = state.selected;
+  if (!robotID || state.view !== 'display' || !state.authenticated || state.passwordChangeRequired || publicRecorder?.pending || recordingStatusPending) return;
+  const requestVersion = ++recordingRequestVersion;
+  recordingStatusPending = true;
+  try {
+    const status = await api(`/api/v1/recordings/${encodeURIComponent(robotID)}/status`, {}, true);
+    if (state.selected !== robotID || state.view !== 'display' || publicRecorder?.pending || requestVersion !== recordingRequestVersion) return;
+    publicRecorder = { robotID, ...status, hasData: Boolean(status.name) };
+    renderPublicHistoryControls();
+  } catch { /* The next status refresh retries after a transient outage. */ }
+  finally { recordingStatusPending = false; }
 }
 
-function togglePublicRecording() {
+async function togglePublicRecording() {
   const robot = selectedPublicRobot();
-  if (!robot) return;
-  if (publicRecorder?.active) {
-    stopPublicRecording();
-  } else {
-    startPublicRecording(robot.id);
+  if (!state.authenticated || state.passwordChangeRequired || !robot || !publicRecorder || publicRecorder.pending || publicRecorder.stopping) return;
+  const requestVersion = ++recordingRequestVersion;
+  const previous = publicRecorder?.robotID === robot.id ? publicRecorder : null;
+  publicRecorder = { ...previous, robotID: robot.id, pending: true };
+  renderPublicHistoryControls();
+  try {
+    const action = previous?.active ? 'stop' : 'start';
+    const status = await api(`/api/v1/recordings/${encodeURIComponent(robot.id)}/${action}`, { method: 'POST' }, true);
+    if (state.selected === robot.id && requestVersion === recordingRequestVersion) publicRecorder = { robotID: robot.id, ...status, hasData: Boolean(status.name) };
+  } catch (error) {
+    if (state.selected === robot.id && requestVersion === recordingRequestVersion) publicRecorder = previous;
+    toast(`录制操作失败：${error.message}`, true);
+  } finally {
+    renderPublicHistoryControls();
+    refreshRecordingStatus();
   }
-  syncPublicStream();
-  renderPublicHistoryControls();
 }
 
-function recordPublicTelemetry(rawEvent, robot) {
-  if (!publicRecorder?.active || !rawEvent || !robot || robot.id !== publicRecorder.robotID) return;
-  publicRecorder.pending.push(rawEvent);
-  publicRecorder.hasData = true;
-  if (publicRecorder.pending.length >= 24 || publicRecorder.pending.join('').length >= 384 * 1024) flushPublicRecording();
-  renderPublicHistoryControls();
-}
-
-function stopPublicRecording() {
-  if (!publicRecorder?.active) return;
-  publicRecorder.active = false;
-  flushPublicRecording();
-  renderPublicHistoryControls();
-}
-
-function openRecordingDatabase() {
-  if (publicRecordingDatabasePromise) return publicRecordingDatabasePromise;
-  if (!window.indexedDB) return Promise.resolve(null);
-  publicRecordingDatabasePromise = new Promise((resolve) => {
-    const request = indexedDB.open('baize-monitor-recordings-v1', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('chunks', { keyPath: 'key' });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => resolve(null);
-  });
-  return publicRecordingDatabasePromise;
-}
-
-function flushPublicRecording() {
-  if (!publicRecorder?.pending.length) return;
-  const recorder = publicRecorder;
-  const events = recorder.pending.splice(0);
-  const chunk = { key: `${recorder.id}:${recorder.index++}`, id: recorder.id, events };
-  recorder.writePromise = recorder.writePromise.then(async () => {
-    const database = await openRecordingDatabase();
-    if (!database) {
-      recorder.chunks.push(chunk);
-      return;
-    }
-    await new Promise((resolve) => {
-      const transaction = database.transaction('chunks', 'readwrite');
-      transaction.objectStore('chunks').put(chunk);
-      transaction.oncomplete = resolve;
-      transaction.onerror = resolve;
-    });
-  });
-}
-
-async function downloadPublicRecording() {
-  if (!publicRecorder) return;
-  flushPublicRecording();
-  await publicRecorder.writePromise;
-  const chunks = [...publicRecorder.chunks];
-  const database = await openRecordingDatabase();
-  if (database) {
-    const stored = await new Promise((resolve) => {
-      const request = database.transaction('chunks', 'readonly').objectStore('chunks').getAll();
-      request.onsuccess = () => resolve(request.result.filter((chunk) => chunk.id === publicRecorder.id));
-      request.onerror = () => resolve([]);
-    });
-    chunks.push(...stored);
-  }
-  chunks.sort((left, right) => left.key.localeCompare(right.key, undefined, { numeric: true }));
-  const events = chunks.flatMap((chunk) => chunk.events || []);
-  const rows = publicRecordingRows(events, publicRecorder.robotID);
-  if (!rows.length) { toast('暂无可下载的录制数据', true); return; }
-  const headers = [
-    '序号', '采样时间（UTC）', '机器人编码', '机器人ID', '记录类型', '电机ID',
-    '电机位置（rad）', '电机速度（rad/s）', '电机转矩（N·m）', 'CPU使用率（%）', '内存使用率（%）',
-    '磁盘使用率（%）', '系统负载（1m）', '最高温度（°C）', 'GPU使用率（%）', 'GPU温度（°C）',
-    '电池电量（%）', '电池电压（V）', '电池电流（A）', '电池功率（W）'
-  ];
-  const body = [headers, ...rows.map((row, index) => [
-    index + 1, row.at, row.code, row.robotID, row.kind, row.motorID,
-    csvNumber(row.positionRad), csvNumber(row.velocityRadPerSec), csvNumber(row.torqueNm),
-    csvNumber(row.cpuPercent), csvNumber(row.memoryPercent), csvNumber(row.diskPercent), csvNumber(row.load1),
-    csvNumber(row.temperatureMax), csvNumber(row.gpuUtilizationPercent), csvNumber(row.gpuTemperatureCelsius),
-    csvNumber(row.batterySocPercent), csvNumber(row.batteryVoltage), csvNumber(row.batteryCurrent), csvNumber(row.batteryPowerWatts)
-  ])]
-    .map((columns) => columns.map(csvCell).join(','))
-    .join('\r\n');
+function downloadPublicRecording() {
+  if (!state.authenticated || !publicRecorder?.hasData || publicRecorder.active || publicRecorder.stopping || publicRecorder.pending) return;
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(new Blob([`\uFEFF${body}\r\n`], { type: 'text/csv;charset=utf-8' }));
-  link.download = `baize-${publicRecorder.robotID}-${publicRecorder.startedAt.replace(/[:.]/g, '-')}.csv`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  toast(`已下载 ${rows.length} 条有序遥测记录`);
-}
-
-function publicRecordingRows(events, robotID) {
-  const rows = [];
-  const seen = new Set();
-  for (const rawEvent of events) {
-    let event;
-    try { event = JSON.parse(rawEvent); } catch { continue; }
-    const robot = event?.robot;
-    if (!robot || robot.id !== robotID) continue;
-    const summary = robot.summary || {};
-    const hostAt = robot.collected_at || robot.last_seen || event.server_time;
-    if (hostAt && !seen.has(`host:${hostAt}`)) {
-      seen.add(`host:${hostAt}`);
-      rows.push({
-        at: hostAt, code: robot.code || '', robotID, kind: '主机摘要', motorID: '',
-        cpuPercent: summary.cpu_percent, memoryPercent: summary.memory_percent, diskPercent: summary.disk_percent,
-        load1: summary.load_1, temperatureMax: summary.temperature_max,
-        gpuUtilizationPercent: summary.gpu?.utilization_percent, gpuTemperatureCelsius: summary.gpu?.temperature_celsius,
-        batterySocPercent: summary.battery?.soc_percent, batteryVoltage: summary.battery?.voltage,
-        batteryCurrent: summary.battery?.current, batteryPowerWatts: summary.battery?.power_watts
-      });
-    }
-    for (const sample of robot.motor_samples || []) {
-      if (!sample?.at) continue;
-      for (const motor of sample.motors || []) {
-        if (!motor?.id) continue;
-        const key = `motor:${sample.at}:${motor.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push({
-          at: sample.at, code: robot.code || '', robotID, kind: '电机采样', motorID: motor.id,
-          positionRad: motor.position_rad, velocityRadPerSec: motor.velocity_rad_per_sec, torqueNm: motor.torque_nm
-        });
-      }
-    }
-  }
-  rows.sort((left, right) => {
-    const leftAt = Date.parse(left.at);
-    const rightAt = Date.parse(right.at);
-    if (Number.isFinite(leftAt) && Number.isFinite(rightAt) && leftAt !== rightAt) return leftAt - rightAt;
-    if (Number.isFinite(leftAt) !== Number.isFinite(rightAt)) return Number.isFinite(leftAt) ? -1 : 1;
-    if (left.kind !== right.kind) return left.kind === '主机摘要' ? -1 : 1;
-    return String(left.motorID).localeCompare(String(right.motorID), undefined, { numeric: true });
-  });
-  return rows;
-}
-
-function csvNumber(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? String(number) : '';
-}
-
-function csvCell(value) {
-  if (value === null || value === undefined) return '';
-  const text = String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  link.href = `/api/v1/recordings/${encodeURIComponent(publicRecorder.robotID)}/download`;
+  link.download = publicRecorder.name;
+  link.click(); // Let the browser stream to disk without a full-file Blob.
 }
 
 function renderSettings() {

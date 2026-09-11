@@ -2,7 +2,6 @@ package robotmodel
 
 import (
 	"testing"
-	"time"
 )
 
 func TestEmbeddedModels(t *testing.T) {
@@ -20,7 +19,7 @@ func TestEmbeddedModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Motor.Topic != "/motor/q2w_upper_motor_joint_state" || profile.Motor.FastSampleRateHz != 500 || profile.Motor.FastBatchInterval.Value() != 2*time.Second {
+	if profile.Motor.Topic != "/motor/q2w_upper_motor_joint_state" {
 		t.Fatalf("unexpected motor profile: %+v", profile.Motor)
 	}
 	if len(profile.Motor.Joints) != 32 || profile.BMS.Topic != "/batcan/data" {

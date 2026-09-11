@@ -13,12 +13,10 @@ set(ROS_HUMBLE_LIB_DIRS
   /opt/ros/humble/lib/x86_64-linux-gnu)
 
 find_package(ament_cmake REQUIRED)
-find_package(diagnostic_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
 
 add_executable(baize-ros2-subscriber src/main.cpp)
-ament_target_dependencies(baize-ros2-subscriber diagnostic_msgs rclcpp sensor_msgs)
+ament_target_dependencies(baize-ros2-subscriber rclcpp)
 target_compile_options(baize-ros2-subscriber PRIVATE -Wall -Wextra -Wpedantic -Werror)
 set_target_properties(baize-ros2-subscriber PROPERTIES
   BUILD_RPATH "${ROS_HUMBLE_LIB_DIRS}"

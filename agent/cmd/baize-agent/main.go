@@ -20,9 +20,15 @@ import (
 	"baize/agent/internal/config"
 	"baize/agent/internal/service"
 	"baize/shared/model"
+	"baize/shared/rawstream"
 )
 
 var version = "dev"
+
+type updateHandoff struct {
+	ready    chan error
+	finished chan error
+}
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "service" {
@@ -90,6 +96,8 @@ func main() {
 }
 
 func run(ctx context.Context, cfg config.Config) error {
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
 	managedSubscriber := os.Getenv("BAIZE_ROS2_SUBSCRIBER") == ""
 	ros2Subscriber, err := service.PrepareROS2Subscriber()
 	if err != nil {
@@ -103,127 +111,185 @@ func run(ctx context.Context, cfg config.Config) error {
 	hostname, _ := os.Hostname()
 	httpClient := &http.Client{Timeout: cfg.Agent.HTTPTimeout.Value()}
 	dashboardClient := agent.NewClient(cfg.Agent.DashboardURL, cfg.Agent.Token, httpClient)
-	var outbox *agent.Outbox
-	if directory := os.Getenv("STATE_DIRECTORY"); directory != "" {
-		outbox, err = agent.NewOutbox(filepath.Join(directory, "telemetry-outbox"))
+	directory := os.Getenv("STATE_DIRECTORY")
+	if directory == "" {
+		cache, err := os.UserCacheDir()
 		if err != nil {
-			return fmt.Errorf("open telemetry outbox: %w", err)
+			return err
 		}
+		directory = filepath.Join(cache, "baize-agent", cfg.Agent.UUID)
 	}
-	systemCollector := collector.NewSystemCollector()
-	var motorCollector *collector.MotorCollector
-	if cfg.Motor.Enabled {
-		motorCollector = collector.NewMotorCollector(cfg.Motor)
-	}
-	var bmsCollector *collector.BMSCollector
-	if cfg.BMS.Enabled {
-		bmsCollector = collector.NewBMSCollector(cfg.BMS)
+	outbox, err := agent.NewRawOutbox(agent.RawCachePath(directory), cfg.Agent.RawCacheBytes)
+	if err != nil {
+		return fmt.Errorf("open raw outbox: %w", err)
 	}
 	if err := agent.ConfirmUpdate(); err != nil {
 		slog.Warn("confirm Agent startup", "error", err)
 	}
-	if cfg.Update.Enabled && version != "dev" {
-		go updateLoop(ctx, cfg, httpClient)
-	}
-
-	identity := model.Robot{UUID: cfg.Agent.UUID, Code: cfg.Agent.RobotCode, Model: cfg.Agent.RobotModel, Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH}
-	reportInterval := cfg.Agent.ReportInterval.Value()
-	if cfg.Motor.FastSampleRateHz > 0 && cfg.Motor.FastBatchInterval.Value() > 0 {
-		reportInterval = cfg.Motor.FastBatchInterval.Value()
-	}
-	ticker := time.NewTicker(reportInterval)
-	defer ticker.Stop()
-	for {
-		started := time.Now()
-		telemetry := collect(ctx, cfg, identity, systemCollector, motorCollector, bmsCollector)
-		if count := model.SanitizeFinite(&telemetry); count > 0 {
-			telemetry.Errors = append(telemetry.Errors, model.ComponentError{Component: "telemetry", Message: fmt.Sprintf("normalized %d non-finite sensor values", count), At: time.Now().UTC()})
-		}
-		reportCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
-		var err error
-		if outbox != nil {
-			enqueueErr := outbox.Enqueue(telemetry)
-			err = errors.Join(enqueueErr, outbox.Flush(reportCtx, dashboardClient))
-		} else {
-			err = dashboardClient.Report(reportCtx, telemetry)
-		}
-		cancel()
-		if err != nil {
-			slog.Warn("report telemetry", "error", err)
-		}
-		slog.Debug("collection complete", "duration", time.Since(started))
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func collect(ctx context.Context, cfg config.Config, robot model.Robot, systemCollector *collector.SystemCollector, motorCollector *collector.MotorCollector, bmsCollector *collector.BMSCollector) model.Telemetry {
-	result := model.Telemetry{SchemaVersion: model.SchemaVersion, Robot: robot, AgentVersion: version, CollectedAt: time.Now().UTC()}
-	var mu sync.Mutex
-	var wait sync.WaitGroup
-	addError := func(component string, err error) {
-		if err == nil {
-			return
-		}
-		mu.Lock()
-		result.Errors = append(result.Errors, model.ComponentError{Component: component, Message: err.Error(), At: time.Now().UTC()})
-		mu.Unlock()
-	}
-	if cfg.System.Enabled {
-		wait.Add(1)
+	sourceCtx, stopSources := context.WithCancel(ctx)
+	defer stopSources()
+	records := make(chan rawstream.Record, 256)
+	var sources sync.WaitGroup
+	startTopic := func(topic, messageType string, setup []string, environment map[string]string, user string) {
+		sources.Add(1)
 		go func() {
-			defer wait.Done()
-			metrics, err := systemCollector.Collect(cfg.System.DiskPaths)
-			mu.Lock()
-			result.System = &metrics
-			mu.Unlock()
-			addError("system", err)
-		}()
-	}
-	if cfg.GPU.Enabled {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			metrics, err := collector.CollectNVIDIAGPUs(cfg.GPU.Command, cfg.GPU.Timeout.Value())
-			if err == nil {
-				mu.Lock()
-				result.GPUs = metrics
-				mu.Unlock()
-			} else if !errors.Is(err, collector.ErrNoGPU) {
-				addError("gpu", err)
+			defer sources.Done()
+			for sourceCtx.Err() == nil {
+				err := collector.StreamRawTopic(sourceCtx, setup, environment, user, topic, messageType, records)
+				if sourceCtx.Err() != nil {
+					return
+				}
+				slog.Warn("ROS2 raw topic stream stopped", "topic", topic, "error", err)
+				timer := time.NewTimer(time.Second)
+				select {
+				case <-sourceCtx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
 			}
 		}()
 	}
-	if motorCollector != nil {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			metrics, err := motorCollector.Collect(ctx)
-			mu.Lock()
-			result.Motors = &metrics
-			mu.Unlock()
-			addError("motor", err)
-		}()
+	if cfg.Motor.Enabled {
+		startTopic(cfg.Motor.Topic, cfg.Motor.MessageType, cfg.Motor.ROSSetup, cfg.Motor.ROSEnvironment, cfg.Motor.ROSUser)
 	}
-	if bmsCollector != nil {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			metrics, err := bmsCollector.Collect(ctx)
-			mu.Lock()
-			result.BMS = &metrics
-			mu.Unlock()
-			addError("bms", err)
-		}()
+	if cfg.BMS.Enabled {
+		startTopic(cfg.BMS.ROSTopic, cfg.BMS.ROSMessageType, cfg.BMS.ROSSetup, cfg.BMS.ROSEnvironment, cfg.BMS.ROSUser)
 	}
-	wait.Wait()
-	return result
+	sources.Add(1)
+	go func() {
+		defer sources.Done()
+		systemCollector := collector.NewSystemCollector()
+		ticker := time.NewTicker(cfg.Agent.ReportInterval.Value())
+		defer ticker.Stop()
+		for sourceCtx.Err() == nil {
+			at := time.Now().UTC()
+			var snapshot model.Telemetry
+			if cfg.System.Enabled {
+				metrics, err := systemCollector.Collect(cfg.System.DiskPaths)
+				if err != nil {
+					snapshot.Errors = append(snapshot.Errors, model.ComponentError{Component: "system", Message: err.Error(), At: at})
+				}
+				snapshot.System = &metrics
+			}
+			if cfg.GPU.Enabled {
+				metrics, err := collector.CollectNVIDIAGPUs(cfg.GPU.Command, cfg.GPU.Timeout.Value())
+				if err != nil && !errors.Is(err, collector.ErrNoGPU) {
+					snapshot.Errors = append(snapshot.Errors, model.ComponentError{Component: "gpu", Message: err.Error(), At: at})
+				}
+				snapshot.GPUs = metrics
+			}
+			model.SanitizeFinite(&snapshot)
+			record, err := rawstream.NewHostRecord(at, snapshot.System, snapshot.GPUs, snapshot.Errors...)
+			if err != nil {
+				slog.Warn("encode host sample", "error", err)
+			} else {
+				select {
+				case records <- record:
+				case <-sourceCtx.Done():
+					return
+				}
+			}
+			select {
+			case <-sourceCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	go func() { sources.Wait(); close(records) }()
+	senderDone := make(chan struct{})
+	go func() {
+		defer close(senderDone)
+		outbox.Run(sourceCtx, dashboardClient)
+	}()
+	defer func() { stopSources(); <-senderDone }()
+
+	// Size-triggered flushes bound memory even if topic rates grow. The limit
+	// also guarantees that one compressed batch fits the configured cache.
+	batchLimit := int(min(cfg.Agent.RawCacheBytes/2, 4<<20))
+	pendingBytes := 0
+	pending := make([]rawstream.Record, 0, 1024)
+	updates := make(chan updateHandoff)
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		sequence, err := outbox.ReserveSequence()
+		if err != nil {
+			return err
+		}
+		data, err := rawstream.Encode(rawstream.Batch{
+			RobotUUID: cfg.Agent.UUID, RobotCode: cfg.Agent.RobotCode, RobotModel: cfg.Agent.RobotModel,
+			Hostname: hostname, OS: runtime.GOOS, Arch: runtime.GOARCH, AgentVersion: version,
+			Sequence: sequence, Records: pending,
+		})
+		if err != nil {
+			return err
+		}
+		if err := outbox.Enqueue(sequence, data); err != nil {
+			return err
+		}
+		clear(pending)
+		pending = pending[:0]
+		pendingBytes = 0
+		return nil
+	}
+	appendRecord := func(record rawstream.Record) error {
+		record.ReceiveTimestamp = time.Now().UTC()
+		size := len(record.Payload) + len(record.Topic) + len(record.MessageType) + len(record.Serialization) + 64
+		if size > batchLimit {
+			return fmt.Errorf("raw message on %s exceeds batch limit %d", record.Topic, batchLimit)
+		}
+		if pendingBytes+size > batchLimit || len(pending) >= 10_000 {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		pending = append(pending, record)
+		pendingBytes += size
+		return nil
+	}
+	if cfg.Update.Enabled && version != "dev" {
+		go updateLoop(ctx, cfg, httpClient, updates)
+	}
+	ticker := time.NewTicker(cfg.Agent.RawBatchInterval.Value())
+	defer ticker.Stop()
+	for {
+		select {
+		case record, ok := <-records:
+			if !ok {
+				return flush()
+			} // final batch stays in the durable outbox
+			if err := appendRecord(record); err != nil {
+				return err
+			}
+		case <-ticker.C:
+			if err := flush(); err != nil {
+				return err
+			}
+		case update := <-updates:
+			stopSources()
+			for record := range records {
+				if err := appendRecord(record); err != nil {
+					update.ready <- err
+					return err
+				}
+			}
+			<-senderDone
+			err := flush()
+			update.ready <- err
+			if err != nil {
+				return err
+			}
+			// A successful exec never returns. On failure let the supervisor
+			// restart the old binary, with the pending data safely on disk.
+			return <-update.finished
+		}
+	}
 }
 
-func updateLoop(ctx context.Context, cfg config.Config, httpClient *http.Client) {
+func updateLoop(ctx context.Context, cfg config.Config, httpClient *http.Client, updates chan<- updateHandoff) {
 	client := agent.NewGitHubClient(httpClient)
 	check := func() {
 		checkCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
@@ -236,8 +302,23 @@ func updateLoop(ctx context.Context, cfg config.Config, httpClient *http.Client)
 		if update == nil {
 			return
 		}
-		slog.Info("applying agent update", "from", version, "to", update.Version)
-		if err := agent.ApplyUpdate(ctx, client, *update); err != nil {
+		slog.Info("prepare agent update", "from", version, "to", update.Version)
+		handoff := updateHandoff{ready: make(chan error, 1), finished: make(chan error, 1)}
+		err = agent.ApplyUpdate(ctx, client, *update, func() error {
+			select {
+			case updates <- handoff:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			select {
+			case err := <-handoff.ready:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		handoff.finished <- err
+		if err != nil {
 			slog.Error("apply update", "error", err)
 		}
 	}

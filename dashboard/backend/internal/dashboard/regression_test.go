@@ -1,8 +1,6 @@
 package dashboard
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,14 +32,10 @@ func TestPublicSubscriptionsIsolateSamples(t *testing.T) {
 		connections = append(connections, conn)
 	}
 	telemetry := model.Telemetry{SchemaVersion: model.SchemaVersion, Robot: model.Robot{UUID: uuid, Code: "M99"}, CollectedAt: time.Now(), Motors: &model.MotorSnapshot{SampleRateHz: 500, Motors: []model.MotorState{{ID: "hip"}, {ID: "knee"}}, Samples: []model.MotorSample{{At: time.Now(), Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 1}, {ID: "knee", TorqueNm: 2}}}}}}
-	data, _ := json.Marshal(telemetry)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/telemetry", bytes.NewReader(data))
-	request.Header.Set("Authorization", "Bearer test-token")
-	response := httptest.NewRecorder()
-	s.ServeHTTP(response, request)
-	if response.Code != 200 {
-		t.Fatal(response.Body.String())
+	if err := store.PutTelemetry(telemetry); err != nil {
+		t.Fatal(err)
 	}
+	s.broadcastRobot(uuid)
 	for index, conn := range connections {
 		var event robotStreamEvent
 		if err := conn.ReadJSON(&event); err != nil {

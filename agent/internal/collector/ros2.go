@@ -1,14 +1,15 @@
 package collector
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"time"
-
-	"baize/agent/internal/config"
-	"baize/shared/model"
+	"regexp"
+	"sort"
+	"strings"
 )
+
+var rosEnvironmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
+var rosUserNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
 const defaultROS2SubscriberBinary = "/opt/baize/agent/baize-ros2-subscriber"
 
@@ -25,30 +26,43 @@ func rosSubscriberCommand(setup []string, environment map[string]string, user, t
 	return rosCommand(setup, environment, user, arguments)
 }
 
-type jointStateJSONMessage struct {
-	Type     string    `json:"type"`
-	StampNS  int64     `json:"stamp_ns"`
-	Name     []string  `json:"name"`
-	Position []float64 `json:"position"`
-	Velocity []float64 `json:"velocity"`
-	Effort   []float64 `json:"effort"`
+func rosCommand(setupFiles []string, environment map[string]string, user, finalCommand string) (string, error) {
+	parts := make([]string, 0, len(setupFiles)+len(environment)+1)
+	for _, path := range setupFiles {
+		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "\x00\n\r") {
+			return "", fmt.Errorf("invalid ROS setup path %q", path)
+		}
+		parts = append(parts, "source "+shellQuote(path))
+	}
+	names := make([]string, 0, len(environment))
+	for name := range environment {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		value := environment[name]
+		if !rosEnvironmentNamePattern.MatchString(name) || strings.ContainsAny(value, "\x00\n\r") {
+			return "", fmt.Errorf("invalid ROS environment variable %q", name)
+		}
+		parts = append(parts, "export "+name+"="+shellQuote(value))
+	}
+	parts = append(parts, "exec "+finalCommand)
+	command := strings.Join(parts, " && ")
+	return wrapROSCommand(command, user, os.Geteuid())
 }
 
-func parseJointStateJSON(data []byte, labels map[string]string, definitions map[string]config.MotorDefinition) ([]model.MotorState, time.Time, error) {
-	var message jointStateJSONMessage
-	if err := json.Unmarshal(data, &message); err != nil {
-		return nil, time.Time{}, fmt.Errorf("decode JointState JSON: %w", err)
+func wrapROSCommand(command, user string, euid int) (string, error) {
+	if user == "" || euid != 0 {
+		return command, nil
 	}
-	if message.Type != "" && message.Type != "motor" {
-		return nil, time.Time{}, fmt.Errorf("unexpected ROS2 subscriber message type %q", message.Type)
+	if !rosUserNamePattern.MatchString(user) {
+		return "", fmt.Errorf("invalid ROS user %q", user)
 	}
-	motors, err := motorStates(message.Name, message.Position, message.Velocity, message.Effort, labels, definitions)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	stamp := time.Time{}
-	if message.StampNS > 0 {
-		stamp = time.Unix(0, message.StampNS).UTC()
-	}
-	return motors, stamp, nil
+	// setpriv execs the lowered-privilege shell in place. This keeps the ROS
+	// client in CommandContext's process tree, so a read timeout kills it too.
+	return "exec /usr/bin/setpriv --reset-env --reuid=" + shellQuote(user) + " --regid=" + shellQuote(user) + " --init-groups -- /bin/bash -lc " + shellQuote(command), nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }

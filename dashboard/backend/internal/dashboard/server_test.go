@@ -1,8 +1,6 @@
 package dashboard
 
 import (
-	"bytes"
-	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -188,48 +186,13 @@ func TestPublicRobotStreamStartsWithRedactedSnapshot(t *testing.T) {
 	}
 }
 
-func TestTelemetryAcceptsGzipMotorBatch(t *testing.T) {
-	store := newTestStore(t)
-	server := NewServer(ServerConfig{AgentToken: "agent-token-long-enough-for-tests", AdminUser: "admin", JWTSecret: "jwt-secret-long-enough-for-tests-123456"}, store)
-	sampleAt := time.Now().UTC()
-	telemetry := model.Telemetry{
-		SchemaVersion: model.SchemaVersion,
-		Robot:         model.Robot{UUID: "52446a60-7483-4ba7-b8c7-b85f60b2a00f", Code: "M99"},
-		CollectedAt:   sampleAt,
-		Motors: &model.MotorSnapshot{SampleRateHz: 500, Samples: []model.MotorSample{
-			{At: sampleAt, Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 1.5}}},
-			{At: sampleAt.Add(2 * time.Millisecond), Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 2.5}}},
-		}},
-	}
-	var body bytes.Buffer
-	compressed := gzip.NewWriter(&body)
-	if err := json.NewEncoder(compressed).Encode(telemetry); err != nil {
-		t.Fatal(err)
-	}
-	if err := compressed.Close(); err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/telemetry", bytes.NewReader(body.Bytes()))
-	request.Header.Set("Authorization", "Bearer agent-token-long-enough-for-tests")
-	request.Header.Set("Content-Encoding", "gzip")
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("gzip telemetry status=%d body=%s", response.Code, response.Body.String())
-	}
-	points, err := store.FastMotorHistory(telemetry.Robot.UUID, sampleAt.Add(-time.Second), sampleAt.Add(time.Second), 30_000)
-	if err != nil || len(points) != 2 || points[1].Motors[0].TorqueNm != 2.5 {
-		t.Fatalf("gzip batch was not stored intact: points=%+v err=%v", points, err)
-	}
-}
-
 func TestInvalidAgentTokenIsRejected(t *testing.T) {
 	store := newTestStore(t)
 	server := NewServer(ServerConfig{
 		AgentToken: "agent-token-long-enough-for-tests", AdminUser: "admin",
 		JWTSecret: "jwt-secret-long-enough-for-tests-123456",
 	}, store)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/telemetry", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/raw", strings.NewReader(`{}`))
 	request.RemoteAddr = "203.0.113.10:4321"
 	request.Header.Set("Authorization", "Bearer wrong-agent-token")
 	response := httptest.NewRecorder()

@@ -69,12 +69,20 @@ func main() {
 	}
 	handler := dashboard.NewServer(dashboard.ServerConfig{
 		AgentToken: agentToken, AdminUser: dashboardconfig.AdminUsername,
-		JWTSecret: jwtSecret, FrontendDir: cfg.Dashboard.FrontendDir, CookieSecure: cfg.Dashboard.CookieSecure,
+		JWTSecret: jwtSecret, FrontendDir: cfg.Dashboard.FrontendDir, RecordingDir: cfg.Dashboard.RecordingDir, CookieSecure: cfg.Dashboard.CookieSecure,
 	}, store)
+	defer func() {
+		if err := handler.Close(); err != nil {
+			slog.Error("finalize recordings", "error", err)
+		}
+	}()
+	// The MCAP download handler clears this deadline only for its file stream.
 	server := &http.Server{Addr: cfg.Dashboard.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -86,4 +94,5 @@ func main() {
 		slog.Error("dashboard server", "error", serveErr)
 		os.Exit(1)
 	}
+	<-shutdownDone
 }

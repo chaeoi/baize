@@ -1,21 +1,14 @@
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
-#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <mutex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <vector>
-#include <chrono>
 
-#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/joint_state.hpp>
 
 #ifndef BAIZE_ROS2_SUBSCRIBER_VERSION
 #define BAIZE_ROS2_SUBSCRIBER_VERSION "dev"
@@ -24,39 +17,20 @@
 namespace {
 
 std::mutex output_mutex;
-std::vector<std::string> last_names;
 
-std::int64_t wallClockNS() {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
-std::int64_t messageStampNS(const builtin_interfaces::msg::Time &stamp) {
-  if (stamp.sec == 0 && stamp.nanosec == 0) {
-    return wallClockNS();
-  }
-  return static_cast<std::int64_t>(stamp.sec) * 1000000000LL +
-         static_cast<std::int64_t>(stamp.nanosec);
+std::uint64_t wallClockNS() {
+  return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
 void writeAll(const void *data, std::size_t size) {
   const auto *bytes = static_cast<const std::uint8_t *>(data);
   while (size > 0) {
     const auto written = std::fwrite(bytes, 1, size, stdout);
-    if (written == 0) {
-      throw std::runtime_error("cannot write ROS2 subscriber output");
-    }
+    if (written == 0) throw std::runtime_error("cannot write ROS2 subscriber output");
     bytes += written;
     size -= written;
   }
-}
-
-void writeU16(std::uint16_t value) {
-  const std::uint8_t bytes[] = {
-      static_cast<std::uint8_t>(value & 0xff),
-      static_cast<std::uint8_t>((value >> 8) & 0xff)};
-  writeAll(bytes, sizeof(bytes));
 }
 
 void writeU64(std::uint64_t value) {
@@ -67,128 +41,44 @@ void writeU64(std::uint64_t value) {
   writeAll(bytes, sizeof(bytes));
 }
 
-void emitMotor(const sensor_msgs::msg::JointState &message) {
-  const auto count = message.name.size();
-  if (count == 0 || count > std::numeric_limits<std::uint16_t>::max() ||
-      count > 1024 || message.position.size() != count ||
-      message.velocity.size() != count || message.effort.size() != count) {
+void writeU32(std::uint32_t value) {
+  const std::uint8_t bytes[] = {
+      static_cast<std::uint8_t>(value & 0xff),
+      static_cast<std::uint8_t>((value >> 8) & 0xff),
+      static_cast<std::uint8_t>((value >> 16) & 0xff),
+      static_cast<std::uint8_t>((value >> 24) & 0xff)};
+  writeAll(bytes, sizeof(bytes));
+}
+
+void emitRaw(const std::shared_ptr<rclcpp::SerializedMessage> &message) {
+  const auto &serialized = message->get_rcl_serialized_message();
+  if (serialized.buffer == nullptr || serialized.buffer_length == 0 ||
+      serialized.buffer_length > std::numeric_limits<std::uint32_t>::max()) {
     return;
   }
-
-  bool include_names = message.name.size() != last_names.size();
-  for (std::size_t index = 0; !include_names && index < count; ++index) {
-    if (message.name[index] != last_names[index]) {
-      include_names = true;
-    }
-  }
-  for (const auto &name : message.name) {
-    if (name.size() > std::numeric_limits<std::uint16_t>::max()) {
-      return;
-    }
-  }
-  const auto stamp = messageStampNS(message.header.stamp);
-  const std::uint8_t header[] = {'B', 'Z', 'M', '1', 1,
-                                 static_cast<std::uint8_t>(include_names ? 1 : 0)};
-
+  const std::uint8_t header[] = {'B', 'Z', 'R', '1', 1};
   std::lock_guard<std::mutex> lock(output_mutex);
   writeAll(header, sizeof(header));
-  writeU64(static_cast<std::uint64_t>(stamp));
-  writeU16(static_cast<std::uint16_t>(count));
-  if (include_names) {
-    for (const auto &name : message.name) {
-      writeU16(static_cast<std::uint16_t>(name.size()));
-      writeAll(name.data(), name.size());
-    }
-    last_names = message.name;
-  }
-  for (const auto *values : {&message.position, &message.velocity,
-                             &message.effort}) {
-    writeAll(values->data(), count * sizeof(double));
-  }
-  std::fflush(stdout);
-}
-
-std::string jsonEscape(std::string_view value) {
-  std::ostringstream output;
-  for (const auto character : value) {
-    switch (character) {
-      case '"': output << "\\\""; break;
-      case '\\': output << "\\\\"; break;
-      case '\b': output << "\\b"; break;
-      case '\f': output << "\\f"; break;
-      case '\n': output << "\\n"; break;
-      case '\r': output << "\\r"; break;
-      case '\t': output << "\\t"; break;
-      default:
-        if (static_cast<unsigned char>(character) < 0x20) {
-          output << "\\u" << std::hex << std::setw(4) << std::setfill('0')
-                 << static_cast<int>(static_cast<unsigned char>(character));
-        } else {
-          output << character;
-        }
-    }
-  }
-  return output.str();
-}
-
-void emitBMS(const diagnostic_msgs::msg::DiagnosticArray &message) {
-  std::ostringstream output;
-  output << "{\"type\":\"bms\",\"stamp_ns\":"
-         << messageStampNS(message.header.stamp)
-         << ",\"status\":[";
-  for (std::size_t status_index = 0; status_index < message.status.size();
-       ++status_index) {
-    if (status_index != 0) output << ',';
-    const auto &status = message.status[status_index];
-    output << "{\"name\":\"" << jsonEscape(status.name)
-           << "\",\"message\":\"" << jsonEscape(status.message)
-           << "\",\"hardware_id\":\"" << jsonEscape(status.hardware_id)
-           << "\",\"values\":[";
-    for (std::size_t value_index = 0; value_index < status.values.size();
-         ++value_index) {
-      if (value_index != 0) output << ',';
-      const auto &value = status.values[value_index];
-      output << "{\"key\":\"" << jsonEscape(value.key)
-             << "\",\"value\":\"" << jsonEscape(value.value) << "\"}";
-    }
-    output << "]}";
-  }
-  output << "]}\n";
-  const auto text = output.str();
-  std::lock_guard<std::mutex> lock(output_mutex);
-  writeAll(text.data(), text.size());
+  writeU64(wallClockNS());
+  writeU32(static_cast<std::uint32_t>(serialized.buffer_length));
+  writeAll(serialized.buffer, serialized.buffer_length);
   std::fflush(stdout);
 }
 
 class Subscriber final : public rclcpp::Node {
  public:
-  Subscriber(std::string topic, std::string message_type)
+  Subscriber(const std::string &topic, const std::string &message_type)
       : Node("baize_agent_subscriber") {
-    if (message_type == "sensor_msgs/msg/JointState") {
-      motor_subscription_ = create_subscription<sensor_msgs::msg::JointState>(
-          topic, rclcpp::SensorDataQoS(),
-          [](sensor_msgs::msg::JointState::ConstSharedPtr message) {
-            emitMotor(*message);
-          });
-      return;
-    }
-    if (message_type == "diagnostic_msgs/msg/DiagnosticArray") {
-      bms_subscription_ =
-          create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
-              topic, rclcpp::QoS(10),
-              [](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr message) {
-                emitBMS(*message);
-              });
-      return;
-    }
-    throw std::invalid_argument("unsupported ROS2 message type: " + message_type);
+    const auto qos = message_type == "sensor_msgs/msg/JointState"
+                         ? rclcpp::SensorDataQoS().keep_last(256)
+                         : rclcpp::QoS(100);
+    subscription_ = create_generic_subscription(
+        topic, message_type, qos,
+        [](std::shared_ptr<rclcpp::SerializedMessage> message) { emitRaw(message); });
   }
 
  private:
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr
-      motor_subscription_;
-  rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr
-      bms_subscription_;
+  std::shared_ptr<rclcpp::GenericSubscription> subscription_;
 };
 
 void usage(std::ostream &output) {
@@ -225,9 +115,6 @@ int main(int argc, char **argv) {
       usage(std::cerr);
       return 2;
     }
-    // The command-line options have already been consumed by this helper.
-    // Do not pass them to rclcpp, which would otherwise try to parse
-    // --topic/--message-type as ROS arguments.
     rclcpp::init(0, nullptr);
     auto node = std::make_shared<Subscriber>(topic, message_type);
     rclcpp::spin(node);
