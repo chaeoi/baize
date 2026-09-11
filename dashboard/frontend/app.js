@@ -11,11 +11,6 @@ const state = {
   reconnectAttempt: 0,
   latestEventAt: 0,
   toastTimer: null,
-  history: [],
-  historyRobot: null,
-  historyLoading: false,
-  historyRequestID: 0,
-  historyController: null,
   publicHistory: [],
   publicHistoryRobot: null,
   publicHistoryLoading: false,
@@ -29,6 +24,7 @@ const state = {
   publicStreamOptions: null,
   publicRealtimeStartedAt: 0,
   publicRealtimeClockOffset: null,
+  publicOnlineSignature: '',
 };
 
 // Display rates are derived from the telemetry contracts, not fixed point-count windows.
@@ -89,7 +85,6 @@ function bindEvents() {
   $('#remark-form').addEventListener('submit', saveRemark);
   $('#delete-robot-button').addEventListener('click', openDeleteRobot);
   $('#delete-robot-form').addEventListener('submit', deleteRobot);
-  $('#history-range').addEventListener('change', loadHistory);
   $('#public-history-range').addEventListener('change', (event) => {
     const range = event.target.value;
     if (!publicHistoryRangeOptions(state.publicHistoryMode).includes(range) || range === state.publicHistoryRange) return;
@@ -115,7 +110,6 @@ function bindEvents() {
   $('#back-to-fleet').addEventListener('click', (event) => { event.preventDefault(); showFleet(); });
   window.addEventListener('popstate', syncPublicRoute);
   window.addEventListener('resize', () => {
-    drawHistoryChart(state.history);
     state.publicHistoryDrawKey = '';
     drawPublicHistory(state.publicHistory);
   });
@@ -362,7 +356,6 @@ function receiveEvent(event, mode) {
     if (event.type === 'removed' && routeID === event.id) showFleet(true);
   }
   render();
-  if (mode === 'admin' && state.selected && state.historyRobot !== state.selected && !state.historyLoading) loadHistory();
 }
 
 function setConnection(type, label) {
@@ -379,6 +372,7 @@ function render() {
 
 function renderPublic() {
   const robots = state.robots;
+  state.publicOnlineSignature = robots.map((item) => `${item.id}:${isPublicOnline(item) ? '1' : '0'}`).join('|');
   const robot = robots.find((item) => item.id === state.selected);
   if (state.selected && !robot && robots.length) {
     showFleet(true);
@@ -409,17 +403,18 @@ function renderRobotList() {
     const battery = summary.battery;
     const online = isPublicOnline(robot);
     const remark = (robot.remark || '').trim();
+    const batteryOnline = online && battery?.online && battery?.present !== false;
     const metric = (label, value, sub, level) => `<div class="robot-card-metric"><span>${label}</span><strong>${value}</strong><div class="meter"><i class="${meterClass(level)}"></i></div><small>${sub}</small></div>`;
     return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="${escapeHTML(publicRouteURL(robot.id, defaultPublicHistoryRoute()))}">
       <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong>${remark ? `<small>${escapeHTML(remark)}</small>` : ''}</div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
       <div class="robot-card-meta"><time>${relativeTime(robot.last_seen)}</time></div>
       <div class="robot-card-metrics">
-        ${metric('CPU', summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', `负载 ${fixed(summary.load_1)}`, summary.cpu_percent)}
-        ${metric('内存', summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', '系统内存', summary.memory_percent)}
-        ${metric('磁盘', summary.has_telemetry ? `${fixed(summary.disk_percent)}%` : '--', '根目录', summary.disk_percent)}
-        ${metric('电池', battery?.online ? `${fixed(battery.soc_percent)}%` : '--', battery?.online ? `${fixed(battery.voltage)} V` : '未接入', battery?.soc_percent)}
+        ${metric('CPU', online && summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', online && summary.has_telemetry ? `负载 ${fixed(summary.load_1)}` : '整机已离线', online && summary.has_telemetry ? summary.cpu_percent : NaN)}
+        ${metric('内存', online && summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', online && summary.has_telemetry ? '系统内存' : '整机已离线', online && summary.has_telemetry ? summary.memory_percent : NaN)}
+        ${metric('磁盘', online && summary.has_telemetry ? `${fixed(summary.disk_percent)}%` : '--', online && summary.has_telemetry ? '根目录' : '整机已离线', online && summary.has_telemetry ? summary.disk_percent : NaN)}
+        ${metric('电池', batteryOnline ? `${fixed(battery.soc_percent)}%` : '--', battery ? (online ? `${fixed(battery.voltage)} V` : '整机已离线') : '未接入', batteryOnline ? battery.soc_percent : NaN)}
       </div>
-      <footer><span>${summary.gpu ? `GPU ${fixed(summary.gpu.utilization_percent)}%` : 'GPU 无数据'}</span><span>${summary.motor_count || 0} 个电机</span><span class="robot-card-diagnostic ${summary.diagnostic_count ? 'has-alert' : ''}">${summary.diagnostic_count ? `${summary.diagnostic_count} 项诊断` : '诊断正常'}</span></footer>
+      <footer><span>${online && summary.gpu ? `GPU ${fixed(summary.gpu.utilization_percent)}%` : (online ? 'GPU 无数据' : 'GPU 状态未知')}</span><span>${summary.motor_count || 0} 个电机 · ${online && summary.motor_topic_online ? '有数据' : '无实时数据'}</span><span class="robot-card-diagnostic ${summary.diagnostic_count && online ? 'has-alert' : ''}">${summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项诊断` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '诊断正常' : '诊断状态未知')}</span></footer>
     </a>`;
   }).join('') || '<div class="empty-line">没有匹配设备</div>';
   $$('#robot-list .robot-card').forEach((card) => card.addEventListener('click', (event) => {
@@ -439,22 +434,23 @@ function renderPublicDetail(robot) {
   $('#robot-status').classList.toggle('online', online);
   $('#detail-beacon').classList.toggle('online', online);
   $('#detail-updated-text').textContent = `采集于 ${formatDate(robot.collected_at)} · ${relativeTime(robot.last_seen)}收到`;
-  const hasTelemetry = Boolean(summary.has_telemetry);
+  const hasTelemetry = online && Boolean(summary.has_telemetry);
   setMetric('cpu', hasTelemetry ? summary.cpu_percent : NaN, hasTelemetry ? `${fixed(summary.cpu_percent)}%` : '--', hasTelemetry ? `负载 ${fixed(summary.load_1)}` : '等待新数据');
   setMetric('memory', hasTelemetry ? summary.memory_percent : NaN, hasTelemetry ? `${fixed(summary.memory_percent)}%` : '--', hasTelemetry ? '内存占用' : '等待新数据');
   setMetric('disk', hasTelemetry ? summary.disk_percent : NaN, hasTelemetry ? `${fixed(summary.disk_percent)}%` : '--', hasTelemetry ? '根目录占用' : '等待新数据');
-  setMetric('battery', battery?.online ? battery.soc_percent : NaN, battery?.online ? `${fixed(battery.soc_percent)}%` : '--', battery ? `${fixed(battery.voltage)} V · ${fixed(battery.current)} A` : '未启用');
+  const batteryOnline = online && battery?.online && battery?.present !== false;
+  setMetric('battery', batteryOnline ? battery.soc_percent : NaN, batteryOnline ? `${fixed(battery.soc_percent)}%` : '--', battery ? (online ? `${fixed(battery.voltage)} V · ${fixed(battery.current)} A` : '整机已离线') : '未启用');
   $('#system-facts').innerHTML = facts([
-    ['负载', fixed(summary.load_1)], ['运行时长', duration(summary.uptime_seconds)], ['采集时间', formatDate(robot.collected_at)], ['状态', online ? '在线运行' : '离线']
+    ['负载', hasTelemetry ? fixed(summary.load_1) : '--'], ['运行时长', hasTelemetry ? duration(summary.uptime_seconds) : '--'], ['采集时间', formatDate(robot.collected_at)], ['状态', online ? '在线运行' : '离线']
   ]);
   const maxTemp = summary.temperature_max;
   const minTemp = summary.temperature_min;
-  $('#thermal-summary').innerHTML = maxTemp === undefined ? '<div class="empty-line">无温度数据</div>' : `<div class="thermal-reading ${maxTemp >= 80 ? 'hot' : ''}"><span>最高温度</span><strong>${fixed(maxTemp)} °C</strong></div><div class="thermal-reading"><span>最低温度</span><strong>${fixed(minTemp)} °C</strong></div><div class="thermal-note">设备上报的热传感器摘要</div>`;
+  $('#thermal-summary').innerHTML = !online ? '<div class="empty-line">整机已离线，暂不显示旧温度</div>' : maxTemp === undefined ? '<div class="empty-line">无温度数据</div>' : `<div class="thermal-reading ${maxTemp >= 80 ? 'hot' : ''}"><span>最高温度</span><strong>${fixed(maxTemp)} °C</strong></div><div class="thermal-reading"><span>最低温度</span><strong>${fixed(minTemp)} °C</strong></div><div class="thermal-note">设备上报的热传感器摘要</div>`;
   $('#component-facts').innerHTML = facts([
-    ['GPU', summary.gpu ? `${fixed(summary.gpu.utilization_percent)}% · ${fixed(summary.gpu.temperature_celsius)} °C` : '无数据'],
-    ['电机', `${summary.motor_count || 0} 个 · ${summary.motor_topic_online ? '有数据' : '无数据'}`],
-    ['诊断', summary.diagnostic_count ? `${summary.diagnostic_count} 项异常` : '正常'],
-    ['电池状态', battery?.online ? powerStatusLabel(battery.power_supply_status) : '未启用']
+    ['GPU', online && summary.gpu ? `${fixed(summary.gpu.utilization_percent)}% · ${fixed(summary.gpu.temperature_celsius)} °C` : (online ? '无数据' : '状态未知')],
+    ['电机', `${summary.motor_count || 0} 个 · ${online && summary.motor_topic_online ? '有数据' : '无实时数据'}`],
+    ['诊断', summary.diagnostic_count ? (online ? `${summary.diagnostic_count} 项异常` : `上次记录 ${summary.diagnostic_count} 项`) : (online ? '正常' : '状态未知')],
+    ['电池状态', batteryOnline ? powerStatusLabel(battery.power_supply_status) : (battery ? (online ? '未接入' : '整机已离线') : '未启用')]
   ]);
   renderPublicHistoryControls(robot);
   if (publicHistoryIsRealtime()) {
@@ -917,32 +913,21 @@ function renderSettings() {
   const robot = state.robots.find((item) => item.uuid === state.selected);
   $('#settings-robot-empty').classList.toggle('hidden', Boolean(robot));
   $('#settings-robot-panel').classList.toggle('hidden', !robot);
-  $('#history-panel').classList.toggle('hidden', !robot);
   if (!robot) return;
   const online = isAdminOnline(robot);
   $('#settings-robot-code').textContent = robot.code;
   $('#settings-robot-status').textContent = online ? '在线' : '离线';
   $('#settings-robot-status').classList.toggle('online', online);
-  const telemetry = robot.telemetry || {};
-  const motor = telemetry.motors || {};
-  const bms = telemetry.bms || {};
+  $('#settings-robot-remark').textContent = robot.remark?.trim() || '未设置备注';
   $('#settings-identity-facts').innerHTML = facts([
     ['UUID', robot.uuid], ['型号', robot.model], ['主机名', robot.hostname], ['平台', `${robot.os}/${robot.arch}`], ['Agent 版本', robot.agent_version], ['最后上报', formatDate(robot.last_seen)]
   ]);
-  $('#settings-config-facts').innerHTML = facts([
-    ['系统采集', telemetry.system ? '已启用' : '未上报'], ['CPU 核心', telemetry.system?.cpu_cores || '-'], ['磁盘路径', (telemetry.system?.disks || []).map((disk) => disk.path).join(', ') || '-'],
-    ['电机 Topic', motor.topic || '-'], ['电机来源', motor.source || '-'], ['BMS 协议', bms.protocol || '-'], ['BMS Topic', bms.interface || '-']
-  ]);
   $('#settings-session').textContent = state.adminUser;
-  if (state.historyRobot === robot.uuid) drawHistoryChart(state.history);
 }
 
 function selectAdminRobot(uuid) {
   state.selected = uuid;
-  state.history = [];
-  state.historyRobot = null;
   render();
-  loadHistory();
 }
 
 function openRemark() {
@@ -975,93 +960,9 @@ async function deleteRobot(event) {
     $('#delete-robot-dialog').close();
     state.robots = state.robots.filter((item) => item.uuid !== robot.uuid);
     state.selected = state.robots[0]?.uuid || null;
-    state.history = [];
-    state.historyRobot = null;
     render();
-    if (state.selected) loadHistory();
     toast('设备及其历史已删除');
   } catch (error) { toast(error.message, true); }
-}
-
-async function loadHistory() {
-  const robot = selectedAdminRobot();
-  state.historyController?.abort();
-  const requestID = ++state.historyRequestID;
-  if (!robot) { state.historyLoading = false; return; }
-  const controller = new AbortController();
-  state.historyController = controller;
-  state.historyLoading = true;
-  $('#history-empty').textContent = '正在读取历史采样';
-  $('#history-empty').classList.remove('hidden');
-  try {
-    const hours = Number($('#history-range').value) || 24;
-    const data = await api(`/api/v1/admin/robots/${encodeURIComponent(robot.uuid)}/history?scope=host&hours=${hours}`, { signal: controller.signal }, true);
-    if (state.selected !== robot.uuid || requestID !== state.historyRequestID) return;
-    state.history = data.points || [];
-    state.historyRobot = robot.uuid;
-    drawHistoryChart(state.history);
-  } catch (error) {
-    if (error.name === 'AbortError' || requestID !== state.historyRequestID) return;
-    $('#history-empty').textContent = error.message;
-    toast(error.message, true);
-  } finally {
-    if (requestID === state.historyRequestID) state.historyLoading = false;
-  }
-}
-
-function drawHistoryChart(points) {
-  const canvas = $('#history-chart');
-  if (!canvas || $('#history-panel').classList.contains('hidden')) return;
-  const available = points.filter((point) => [point.cpu_percent, point.memory_percent, point.battery_soc_percent].some((value) => Number.isFinite(Number(value))));
-  $('#history-empty').classList.toggle('hidden', available.length > 1);
-  if (available.length <= 1) {
-    $('#history-empty').textContent = '暂无历史数据';
-    return;
-  }
-  const bounds = canvas.parentElement.getBoundingClientRect();
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  const width = Math.max(300, Math.floor(bounds.width));
-  const height = Math.max(190, Math.floor(bounds.height));
-  canvas.width = Math.floor(width * ratio);
-  canvas.height = Math.floor(height * ratio);
-  const context = canvas.getContext('2d');
-  context.scale(ratio, ratio);
-  context.clearRect(0, 0, width, height);
-  const padding = { top: 15, right: 16, bottom: 28, left: 38 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-  const startAt = Date.parse(available[0].at);
-  const timeSpan = Math.max(1, Date.parse(available.at(-1).at) - startAt);
-  context.strokeStyle = '#dfe6e8';
-  context.fillStyle = '#73818a';
-  context.font = '11px "LXGW WenKai Screen", system-ui';
-  context.lineWidth = 1;
-  for (let value = 0; value <= 100; value += 25) {
-    const y = padding.top + chartHeight * (1 - value / 100);
-    context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
-    context.fillText(`${value}%`, 4, y + 4);
-  }
-  const series = [
-    ['cpu_percent', '#2376bc'], ['memory_percent', '#65758b'], ['battery_soc_percent', '#0d8d65']
-  ];
-  series.forEach(([field, color]) => {
-    context.strokeStyle = color; context.lineWidth = 2; context.lineJoin = 'round'; context.lineCap = 'round'; context.beginPath();
-    let started = false;
-    available.forEach((point, index) => {
-      const value = Number(point[field]);
-      if (!Number.isFinite(value)) { started = false; return; }
-      const x = padding.left + chartWidth * ((Date.parse(point.at) - startAt) / timeSpan);
-      const y = padding.top + chartHeight * (1 - Math.max(0, Math.min(100, value)) / 100);
-      if (!started) { context.moveTo(x, y); started = true; } else context.lineTo(x, y);
-    });
-    context.stroke();
-  });
-  const first = new Date(available[0].at);
-  const last = new Date(available[available.length - 1].at);
-  context.fillStyle = '#73818a';
-  context.fillText(first.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }), padding.left, height - 7);
-  const lastLabel = last.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-  context.fillText(lastLabel, width - padding.right - context.measureText(lastLabel).width, height - 7);
 }
 
 function drawPublicHistory(points) {
@@ -1321,6 +1222,8 @@ function updateClock() {
 function updatePublicLiveState() {
   const latest = state.robots.reduce((value, robot) => !value || Date.parse(robot.last_seen) > Date.parse(value) ? robot.last_seen : value, '');
   if (latest) $('#last-event').textContent = `最新 ${relativeTime(latest)}`;
+  const signature = state.robots.map((robot) => `${robot.id}:${isPublicOnline(robot) ? '1' : '0'}`).join('|');
+  if (signature !== state.publicOnlineSignature) { renderPublic(); return; }
   const selected = selectedPublicRobot();
   if (selected) {
     const online = isPublicOnline(selected);
@@ -1350,7 +1253,7 @@ function formatDate(value) { const date = new Date(value); return Number.isNaN(d
 function relativeTime(value) { const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000)); if (!Number.isFinite(seconds)) return '-'; if (seconds < 2) return '刚刚'; if (seconds < 60) return `${seconds} 秒前`; const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes} 分钟前`; return `${Math.floor(minutes / 60)} 小时前`; }
 function duration(value) { if (!Number.isFinite(Number(value))) return '-'; const seconds = Math.max(0, Math.floor(Number(value))); const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.floor((seconds % 3600) / 60); return days ? `${days} 天 ${hours} 小时` : `${hours} 小时 ${minutes} 分`; }
 function fixed(value, digits = 1) { return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '-'; }
-function powerStatusLabel(value) { return ({ charging: '充电中', discharging: '放电中', not_charging: '未充电', full: '已充满' })[value] || value || '在线'; }
+function powerStatusLabel(value) { return ({ charging: '充电中', discharging: '放电中', not_charging: '未充电', full: '已充满' })[value] || value || '状态未知'; }
 function bytes(value) { const number = Number(value); if (!Number.isFinite(number) || number <= 0) return '-'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; let size = number; let index = 0; while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; } return `${size.toFixed(index ? 1 : 0)} ${units[index]}`; }
 function escapeHTML(value) { return String(value ?? '').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character])); }
 function toast(message, error = false) { const element = $('#toast'); element.textContent = message; element.className = `toast show${error ? ' error' : ''}`; clearTimeout(state.toastTimer); state.toastTimer = setTimeout(() => { element.className = 'toast'; }, 2600); }

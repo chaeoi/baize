@@ -237,9 +237,20 @@ func (s *Server) publicRobotWithSamples(record RobotRecord, includeSamples bool)
 		summary.MotorTopicOnline = telemetry.Motors.TopicOnline
 	}
 	collectedAt := telemetry.CollectedAt
+	online := time.Since(record.LastSeen) <= onlineAfter
+	// Component values come from the last retained telemetry snapshot. Once
+	// the Agent stops reporting, those values are historical and must not be
+	// presented as live channel health.
+	if !online {
+		if summary.Battery != nil {
+			summary.Battery.Online = false
+			summary.Battery.Present = false
+		}
+		summary.MotorTopicOnline = false
+	}
 	robot := PublicRobot{
 		ID: publicRobotID(s.config.JWTSecret, record.UUID), Code: record.Code, Model: record.Model,
-		Remark: record.Remark, Online: time.Since(record.LastSeen) <= onlineAfter,
+		Remark: record.Remark, Online: online,
 		LastSeen: record.LastSeen, CollectedAt: collectedAt, Summary: summary,
 	}
 	if telemetry.Motors != nil {

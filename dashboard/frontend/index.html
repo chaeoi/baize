@@ -8,7 +8,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://registry.npmmirror.com" crossorigin>
   <link rel="stylesheet" href="https://registry.npmmirror.com/lxgw-wenkai-screen-web/1.522.0/files/style.css">
-  <link rel="stylesheet" href="/styles.css?v=4">
+  <link rel="stylesheet" href="/styles.css?v=5">
 </head>
 <body>
   <a id="skip-link" class="skip-link" href="#public-view">跳到主要内容</a>
@@ -17,7 +17,7 @@
       <div class="brand-lockup login-brand"><span class="brand-mark"><i data-lucide="scan-line"></i></span><div><strong>白泽</strong><small>Baize Robotics Monitor</small></div></div>
       <span class="eyebrow">管理后台</span>
       <h1>进入控制台</h1>
-      <p class="login-copy">查看设备身份、采集配置与运行历史。</p>
+      <p class="login-copy">查看设备状态与身份信息。</p>
       <form id="login-form" class="login-form">
         <input id="username" name="username" type="text" value="admin" autocomplete="username" hidden>
         <label for="password">管理密码</label>
@@ -123,19 +123,14 @@
     </main>
 
     <main id="settings-view" class="settings-view hidden" tabindex="-1">
-      <header class="settings-header"><div><span class="eyebrow">Private workspace</span><h1>控制台设置</h1></div><div class="settings-header-actions"><span class="session-badge"><i data-lucide="shield-check"></i><span id="settings-session">admin</span></span><a class="button subtle" href="/"><i data-lucide="layout-dashboard"></i><span>展示页</span></a></div></header>
+      <header class="settings-header"><div><span class="eyebrow">Private workspace</span><h1>设备管理</h1><p>查看接入状态，维护设备备注。</p></div><div class="settings-header-actions"><span class="session-badge"><i data-lucide="shield-check"></i><span id="settings-session">admin</span></span><a class="button subtle" href="/"><i data-lucide="layout-dashboard"></i><span>展示页</span></a></div></header>
       <div class="settings-layout">
-        <aside class="settings-directory settings-section"><div class="section-head"><div><span class="eyebrow">Fleet registry</span><h2>机器人</h2></div><span id="settings-count" class="count-badge">0</span></div><div id="settings-robot-list" class="settings-robot-list"></div></aside>
+        <aside class="settings-directory settings-section"><div class="section-head"><div><span class="eyebrow">Fleet registry</span><h2>设备目录</h2></div><span id="settings-count" class="count-badge">0</span></div><div id="settings-robot-list" class="settings-robot-list"></div></aside>
         <section class="settings-workspace">
-          <article id="settings-robot-empty" class="settings-section settings-empty"><i data-lucide="mouse-pointer-click"></i><strong>选择一台机器人</strong><span>身份与采集配置仅在控制台显示</span></article>
+          <article id="settings-robot-empty" class="settings-section settings-empty"><i data-lucide="mouse-pointer-click"></i><strong>选择一台设备</strong><span>设备身份和状态会显示在这里</span></article>
           <article id="settings-robot-panel" class="settings-section hidden">
-            <div class="settings-robot-title"><div><span class="eyebrow">Robot identity</span><h2 id="settings-robot-code">-</h2><span id="settings-robot-status" class="status-label">离线</span></div><div class="title-actions"><button id="remark-button" class="icon-button" type="button" title="编辑备注" aria-label="编辑备注"><i data-lucide="pencil"></i></button><button id="delete-robot-button" class="icon-button danger-icon" type="button" title="删除设备" aria-label="删除设备"><i data-lucide="trash-2"></i></button></div></div>
-            <div class="settings-block"><h3>身份信息</h3><dl id="settings-identity-facts" class="fact-list"></dl></div>
-            <div class="settings-block"><h3>采集配置</h3><dl id="settings-config-facts" class="fact-list"></dl></div>
-          </article>
-          <article id="history-panel" class="settings-section history-section hidden">
-            <div class="section-head"><div><span class="eyebrow">Telemetry history</span><h2>运行趋势</h2></div><select id="history-range" class="compact-select" aria-label="历史范围"><option value="1">最近 1 小时</option><option value="6">最近 6 小时</option><option value="24" selected>最近 1 天</option><option value="168">最近 7 天</option></select></div>
-            <div class="history-body"><div class="chart-legend"><span><i class="legend-cpu"></i>CPU</span><span><i class="legend-memory"></i>内存</span><span><i class="legend-battery"></i>电池</span></div><div class="chart-frame"><canvas id="history-chart"></canvas><div id="history-empty" class="chart-empty">暂无历史数据</div></div></div>
+            <div class="settings-robot-title"><div><span class="eyebrow">Robot identity</span><h2 id="settings-robot-code">-</h2><div class="settings-title-meta"><span id="settings-robot-status" class="status-label">离线</span><span id="settings-robot-remark">未设置备注</span></div></div><div class="title-actions"><button id="remark-button" class="icon-button" type="button" title="编辑备注" aria-label="编辑备注"><i data-lucide="pencil"></i></button><button id="delete-robot-button" class="icon-button danger-icon" type="button" title="删除设备" aria-label="删除设备"><i data-lucide="trash-2"></i></button></div></div>
+            <div class="settings-block"><h3>设备信息</h3><dl id="settings-identity-facts" class="fact-list"></dl></div>
           </article>
         </section>
       </div>
@@ -146,6 +141,6 @@
   <dialog id="delete-robot-dialog"><form id="delete-robot-form" class="dialog-form"><div class="dialog-heading"><div><span class="eyebrow">Remove device</span><h2 id="delete-robot-title">删除设备</h2></div><button class="icon-button dialog-close" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><p class="dialog-copy">设备目录、备注和该设备的历史采样将被删除。Agent 再次上报时会作为新接入设备出现。</p><div class="dialog-actions"><button class="button subtle dialog-close" type="button">取消</button><button class="button danger solid-danger" type="submit"><i data-lucide="trash-2"></i><span>确认删除</span></button></div></form></dialog>
   <div id="toast" class="toast" role="status"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script src="/app.js?v=6" defer></script>
+  <script src="/app.js?v=8" defer></script>
 </body>
 </html>
