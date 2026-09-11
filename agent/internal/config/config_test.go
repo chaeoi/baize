@@ -60,6 +60,27 @@ system:
 	}
 }
 
+func TestLoadAcceptsLegacyAutomaticUpdateField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	data := []byte(`model: 2m_v0.1.2
+agent:
+  uuid: 7fd34256-bf3a-4cf6-8da0-fbce40f34d11
+  robot_code: TEST
+  dashboard_url: https://dashboard.example.test
+  token: long-enough-agent-token
+update:
+  enabled: true
+  automatic: true
+  check_interval: 1m
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("legacy automatic field must remain readable: %v", err)
+	}
+}
+
 func TestLoadRejectsExternalProfileOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
 	data := []byte(`model: 2m_v0.1.2

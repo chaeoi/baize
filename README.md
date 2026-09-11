@@ -148,7 +148,7 @@ sudo /opt/baize/agent/baize-agent service install
 也可以在安装时一次传入完整配置，验证通过后服务会立即启动：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/install.sh | \
+curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/install.sh | \
   sudo sh -s -- \
   --dashboard-url http://<dashboard-host>:8080 \
   --token '<agent-token>' \
@@ -156,9 +156,21 @@ curl -fsSL https://raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/inst
   --robot-model 2m_v0.1.2
 ```
 
+需要真正一条命令完成安装时，可把四个参数放入环境变量后执行：
+
+```bash
+curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/install.sh | \
+  sudo env \
+  BAIZE_DASHBOARD_URL=http://<dashboard-host>:8080 \
+  BAIZE_AGENT_TOKEN='<agent-token>' \
+  BAIZE_ROBOT_CODE=M99 \
+  BAIZE_ROBOT_MODEL=2m_v0.1.2 \
+  sh
+```
+
 下载脚本只负责选择架构、校验 Release，然后把安装参数传给
 `baize-agent service install`。安装后的 Agent 按 `update.check_interval` 定时直接检查
-GitHub Release，并在校验通过后自动升级，不依赖 Dashboard 在线或参与发布。
+GitHub Release（默认经 GitWarp 加速），并在校验通过后自动升级，不依赖 Dashboard 在线或参与发布。
 未传 `--uuid` 时 Agent 生成永久 UUID；也支持 `--force-config`。安装参数只用于写入 `config.yml`，不会成为第二个
 运行时配置来源；已有有效配置默认保留，传入某个参数时只更新对应字段。`--force-config`
 用于从默认模板重新生成配置。可用以下命令查看状态或卸载服务；卸载保留二进制和配置，
@@ -178,16 +190,8 @@ sudo /opt/baize/agent/baize-agent service uninstall
 - 电机：`/motor/q2w_upper_motor_joint_state`，`sensor_msgs/msg/JointState`
 - 电池：`/batcan/data`，`diagnostic_msgs/msg/DiagnosticArray`
 
-电池 topic 由独立 BMS 服务发布：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/chaeoi/batcan/main/deploy/install.sh | \
-  sudo sh -s --
-sudoedit /opt/batcan/config.yml
-# 2m_v0.1.2 对应当前 Batcan 的 KVMS profile：
-# profile: 98b8d1c1-6a34-45a4-9687-e9a09ef20204
-sudo systemctl enable --now batcan
-```
+电池 topic 由独立 BMS 服务发布，仓库地址：
+`https://github.com/chaeoi/batcan`
 
 ## 本地联调
 
