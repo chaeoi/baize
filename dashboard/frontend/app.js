@@ -1189,10 +1189,13 @@ function robotKey(robot, mode) { return mode === 'admin' ? robot.uuid : robot.id
 function isPublicOnline(robot) { return Boolean(robot.online) && Date.now() - Date.parse(robot.last_seen) <= 12000; }
 function isAdminOnline(robot) { return Date.now() - Date.parse(robot.last_seen) <= 12000; }
 function motorStatusText(summary, online) {
-  const count = Number(summary?.motor_count) || 0;
-  if (!online) return count ? `${count} 个离线` : '设备离线';
-  if (!count) return '暂无数据';
-  return `${count} 个${summary?.motor_topic_online ? '在线' : '离线'}`;
+  const total = Number(summary?.motor_count) || 0;
+  const onlineCount = online ? (Number(summary?.motor_online_count) || 0) : 0;
+  const offlineCount = Math.max(0, total - onlineCount);
+  if (!total) return online ? '暂无数据' : '设备离线';
+  if (!offlineCount) return `${onlineCount} 个在线`;
+  if (!onlineCount) return `${offlineCount} 个离线`;
+  return `${onlineCount} 个在线 · ${offlineCount} 个离线`;
 }
 
 function setMetric(name, value, display, sub) {
