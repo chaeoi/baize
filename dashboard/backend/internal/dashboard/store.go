@@ -549,9 +549,6 @@ func makeHistoryPoint(telemetry model.Telemetry) HistoryPoint {
 		point.Motors = make([]MotorHistoryPoint, 0, len(motors.Motors))
 		for _, motor := range motors.Motors {
 			velocity := motor.VelocityRadPerSec
-			if velocity == 0 && motor.VelocityRPS != 0 {
-				velocity = motor.VelocityRPS
-			}
 			point.Motors = append(point.Motors, MotorHistoryPoint{ID: motor.ID, Label: motor.Label, PositionRad: motor.PositionRad, VelocityRadPerSec: velocity, TorqueNm: motor.TorqueNm})
 		}
 	}

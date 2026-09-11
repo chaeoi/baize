@@ -2,6 +2,7 @@ dashboard:
   agent_token: ""
   listen: ":8080"
   data_dir: "/dashboard/data/control"
+  recording_dir: "/dashboard/data/recordings"
   history_data_dir: "/dashboard/data/history"
   history_retention: "2160h"
   history_sample_interval: "2s"

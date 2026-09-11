@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -15,60 +14,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	"baize/shared/model"
 )
-
-func TestOutboxSurvivesFailureAndRestart(t *testing.T) {
-	directory := t.TempDir()
-	outbox, err := NewOutbox(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	telemetry := model.Telemetry{SchemaVersion: 1, CollectedAt: time.Now(), Motors: &model.MotorSnapshot{Samples: []model.MotorSample{{At: time.Now(), Motors: []model.MotorSampleState{{ID: "hip", TorqueNm: 7}}}}}}
-	if err := outbox.Enqueue(telemetry); err != nil {
-		t.Fatal(err)
-	}
-	telemetry.Motors.Samples[0].Motors[0].TorqueNm = 99
-	failure := true
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if failure {
-			w.WriteHeader(503)
-			return
-		}
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
-	client := NewClient(server.URL, "token", server.Client())
-	if err := outbox.Flush(t.Context(), client); err == nil {
-		t.Fatal("failed request was acknowledged")
-	}
-	entries, _ := os.ReadDir(directory)
-	if len(entries) != 1 {
-		t.Fatal("failed batch was lost")
-	}
-	data, _ := os.ReadFile(filepath.Join(directory, entries[0].Name()))
-	var saved model.Telemetry
-	if err := json.Unmarshal(data, &saved); err != nil {
-		t.Fatal(err)
-	}
-	if saved.Motors.Samples[0].Motors[0].TorqueNm != 7 {
-		t.Fatal("queued snapshot changed with collector buffer")
-	}
-	failure = false
-	reopened, err := NewOutbox(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reopened.Flush(t.Context(), client); err != nil {
-		t.Fatal(err)
-	}
-	entries, _ = os.ReadDir(directory)
-	if len(entries) != 0 {
-		t.Fatal("acknowledged batch was not removed")
-	}
-}
 
 func TestRecoverInterruptedUpdate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agent")
@@ -137,19 +85,33 @@ func main(){for _,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("202609
 				candidate.Version = "20260906"
 			}
 			called := false
+			handoffCalled := false
 			err := applyUpdate(t.Context(), client, candidate, path, []string{path, "run", "--config", "test.yml"}, os.Environ(), func(name string, args, environment []string) error {
 				called = true
+				if !handoffCalled {
+					t.Error("exec before collection was drained")
+				}
 				data, _ := os.ReadFile(name)
 				if !bytes.Equal(data, binary) {
 					t.Error("replacement not installed")
 				}
 				return errors.New("exec failed")
+			}, func() error {
+				handoffCalled = true
+				data, _ := os.ReadFile(path)
+				if !bytes.Equal(data, old) {
+					t.Error("binary replaced before handoff")
+				}
+				return nil
 			})
 			if err == nil {
 				t.Fatal("update unexpectedly succeeded")
 			}
 			if called == wrongVersion {
 				t.Fatal("wrong execution decision")
+			}
+			if handoffCalled == wrongVersion {
+				t.Fatal("collection interrupted for invalid candidate")
 			}
 			data, _ := os.ReadFile(path)
 			if !bytes.Equal(data, old) {

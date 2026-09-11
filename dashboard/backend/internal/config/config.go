@@ -42,6 +42,7 @@ type DashboardConfig struct {
 	AgentToken            string
 	Listen                string
 	DataDir               string
+	RecordingDir          string
 	HistoryDataDir        string
 	HistoryRetention      Duration
 	HistorySampleInterval Duration
@@ -56,6 +57,7 @@ func Default() Config {
 		AgentToken:            "",
 		Listen:                ":8080",
 		DataDir:               "/dashboard/data/control",
+		RecordingDir:          "/dashboard/data/recordings",
 		HistoryDataDir:        "/dashboard/data/history",
 		HistoryRetention:      Duration(90 * 24 * time.Hour),
 		HistorySampleInterval: Duration(2 * time.Second),
@@ -67,6 +69,7 @@ type fileDashboardConfig struct {
 	AgentToken            *string   `yaml:"agent_token"`
 	Listen                *string   `yaml:"listen"`
 	DataDir               *string   `yaml:"data_dir"`
+	RecordingDir          *string   `yaml:"recording_dir"`
 	HistoryDataDir        *string   `yaml:"history_data_dir"`
 	HistoryRetention      *Duration `yaml:"history_retention"`
 	HistorySampleInterval *Duration `yaml:"history_sample_interval"`
@@ -107,6 +110,9 @@ func Load(path string) (Config, error) {
 	if d.DataDir != nil {
 		cfg.Dashboard.DataDir = *d.DataDir
 	}
+	if d.RecordingDir != nil {
+		cfg.Dashboard.RecordingDir = *d.RecordingDir
+	}
 	if d.HistoryDataDir != nil {
 		cfg.Dashboard.HistoryDataDir = *d.HistoryDataDir
 	}
@@ -144,6 +150,12 @@ func (c Config) Validate() error {
 	}
 	if !filepath.IsAbs(d.HistoryDataDir) {
 		return errors.New("dashboard.history_data_dir must be an absolute path")
+	}
+	if !filepath.IsAbs(d.RecordingDir) {
+		return errors.New("dashboard.recording_dir must be an absolute path")
+	}
+	if filepath.Clean(d.RecordingDir) == filepath.Clean(d.DataDir) || filepath.Clean(d.RecordingDir) == filepath.Clean(d.HistoryDataDir) {
+		return errors.New("dashboard.recording_dir must be different from data_dir and history_data_dir")
 	}
 	if filepath.Clean(d.DataDir) == filepath.Clean(d.HistoryDataDir) {
 		return errors.New("dashboard.data_dir and dashboard.history_data_dir must be different directories")

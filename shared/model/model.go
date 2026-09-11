@@ -121,14 +121,12 @@ type MotorState struct {
 	Label             string  `json:"label,omitempty"`
 	PositionRad       float64 `json:"position_rad"`
 	VelocityRadPerSec float64 `json:"velocity_rad_per_sec"`
-	// VelocityRPS is accepted for compatibility with agents before the unit name was corrected.
-	VelocityRPS  float64 `json:"velocity_rps,omitempty"`
-	TorqueNm     float64 `json:"torque_nm"`
-	Brand        string  `json:"brand,omitempty"`
-	Model        string  `json:"model,omitempty"`
-	CANInterface string  `json:"can_interface,omitempty"`
-	ControlMode  string  `json:"control_mode,omitempty"`
-	VirtualJoint bool    `json:"virtual_joint,omitempty"`
+	TorqueNm          float64 `json:"torque_nm"`
+	Brand             string  `json:"brand,omitempty"`
+	Model             string  `json:"model,omitempty"`
+	CANInterface      string  `json:"can_interface,omitempty"`
+	ControlMode       string  `json:"control_mode,omitempty"`
+	VirtualJoint      bool    `json:"virtual_joint,omitempty"`
 }
 
 type UpdateInfo struct {

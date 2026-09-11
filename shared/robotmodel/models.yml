@@ -15,9 +15,6 @@ motor:
     ROS_LOCALHOST_ONLY: "1"
   ros_user: ubuntu
   read_timeout: 5s
-  fast_sample_rate_hz: 500
-  fast_buffer_seconds: 10
-  fast_batch_interval: 2s
   joints:
     motor_id_01: {label: waist_1, brand: drive-unit, model: model-01, can_interface: can0, control_mode: PT}
     motor_id_02: {label: waist_2_virtual, brand: drive-unit, model: model-02, can_interface: can0, control_mode: PT, virtual_joint: true}

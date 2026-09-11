@@ -70,10 +70,53 @@ docker logs -f baize 2>&1 | grep 'invalid agent token'
 `view` 支持 `host`、`motors`、`single`；主机 `range` 为小时数
 `1`、`6`、`24`、`168`，电机为 `60`（最近 1 分钟）或 `realtime`。
 全部电机通过 `metric=torque_nm|velocity_rad_per_sec|position_rad` 选择指标。
-选择器、图表和录制 CSV 直接使用上报的电机 ID，不显示关节别名。
+选择器和图表直接使用 ROS2 消息中的电机 ID，不显示关节别名。
 从列表打开机器人默认查看主机最近 1 小时；点击其他趋势维度使用该维度默认范围。
 刷新、分享链接及浏览器前进后退按网址恢复筛选，重新进入实时模式从当次进入开始累积。
 切换机器人、维度、范围或电机时会取消旧历史请求、清空旧图表数据并同步高频采样订阅。
+
+## 原始转发与 MCAP 录制
+
+Agent 持续订阅电机和电池 topic，直接获取 ROS2 序列化后的 CDR 字节，不解析字段、
+计算摘要或抽样。主机/GPU 指标按 `agent.report_interval` 采集为一条 JSON 消息，
+使用 `/baize/host` topic；三类数据经过同一条二进制分批、Zstandard 快速压缩链路
+发送到 `POST /api/v1/raw`。批次携带机器人身份，每条消息携带时间戳。
+
+Dashboard 后端解压和解析消息，生成摘要、曲线和历史数据。不录制时也持续转发，
+因此曲线不依赖录制开关。电机和电池原始消息均逐条保留；面板显示与历史摘要的抽样
+不会改变录制内容。
+
+登录管理员账号并完成首次改密后，回到展示页点击“开始录制 / 停止录制”，Dashboard 后端将该机器人录制区间内收到的
+全部原始数据写入压缩 MCAP，存储目录由 `dashboard.recording_dir` 指定，默认
+`/dashboard/data/recordings`。浏览器只查询录制状态和下载文件，不在内存或 IndexedDB
+中积累录制数据。录制独立于当前曲线筛选，刷新、关闭页面或切换机器人后仍继续，
+回到该机器人页面可停止。下载按钮获取最近一次完成的录制，之前的文件保留在服务器目录。
+
+MCAP 内的 ROS2 通道保留原始 CDR 和完整 `ros2msg` 消息定义，主机通道使用 JSON 和
+JSON Schema，并附带机器人 UUID、编码和型号。可交给支持 CDR、JSON 的 MCAP 读取器
+处理；在 PlotJuggler 中使用 MCAP 加载器及相应消息解析插件。它是混合消息编码的
+MCAP，不声明只允许 CDR 的 `ros2` profile，不能把该文件等同于 `ros2 bag record` 的输出。
+
+Agent 的 `raw_batch_interval` 默认 `2s`，控制批量发送延迟，最小 `250ms`；批次还会
+按大小提前发送以限制内存。`raw_cache_bytes` 默认 `268435456`（256 MiB），按压缩后的
+文件字节数限制本地缓存，最小 1 MiB。缓存位于 systemd `StateDirectory` 下的
+`raw-outbox`，直接运行时位于用户缓存目录的 `baize-agent/<uuid>/raw-outbox`。
+网络正常与断网使用同一队列，成功确认后删除对应批次；满时删除最旧批次，保留新数据。
+队列使用内存 FIFO 索引，运行期间无需反复扫描缓存目录，HTTP 等待不阻塞采集。
+
+停止录制后显示“等待缓存补齐”，收到跨过停止时间的有序批次后才完成文件，避免遗漏
+断网期间仍在缓存中的消息。超过缓存上限而淘汰的数据不会恢复；若 Agent 一直离线，
+则会一直等待恢复连接。录制边界使用 Agent 接收时间与 Dashboard 的开始/停止时间，
+两端系统时钟应保持同步；ROS header 时间另存为 MCAP 的发布时间，CDR 内容不改写。
+Dashboard 录制时先将区间内的压缩批次写入 `.mcap.journal` 并同步到磁盘，再确认接收；
+MCAP 正常封存后删除对应日志。异常退出后，下次启动自动将日志恢复成同名 MCAP，
+仅忽略末尾尚未写完的批次；完整批次损坏会报错并保留原件。日志临时占用额外磁盘空间，
+不增加浏览器内存或 Agent 网络流量。写盘失败会中断本次录制并在页面显示错误，
+实时曲线继续工作；修复磁盘问题后可重试录制，失败期间的数据不属于成功录制内容。
+Agent 序号按块持久化预留，不依赖系统时间，重启跳过未使用序号；自动更新先下载、
+校验候选版本，再停止采集并保存剩余批次后替换进程。
+
+本次更新移除了旧 JSON 遥测接口和 CSV 录制链路，需要同时更新 Agent 与 Dashboard。
 
 ## Agent
 
@@ -148,9 +191,9 @@ sudo systemctl enable --now batcan
 
 ## 本地联调
 
-在 ROS2 Humble 主机上运行动态模拟器，可持续发布 32 个电机与标准电池状态：
+在 ROS2 Humble 主机上运行动态模拟器，可持续发布 32 个电机与 `DiagnosticArray` 电池消息：
 
 ```bash
 source /opt/ros/humble/setup.bash
-python3 agent/deploy/simulate_ros2.py --rate 5
+python3 agent/deploy/simulate_ros2.py --rate 500 --battery-rate 20
 ```

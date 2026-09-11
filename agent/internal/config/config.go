@@ -55,13 +55,15 @@ type Config struct {
 }
 
 type AgentConfig struct {
-	UUID           string   `json:"uuid" yaml:"uuid"`
-	RobotCode      string   `json:"robot_code" yaml:"robot_code"`
-	RobotModel     string   `json:"robot_model" yaml:"robot_model"`
-	DashboardURL   string   `json:"dashboard_url" yaml:"dashboard_url"`
-	Token          string   `json:"token" yaml:"token"`
-	ReportInterval Duration `json:"report_interval" yaml:"report_interval"`
-	HTTPTimeout    Duration `json:"http_timeout" yaml:"http_timeout"`
+	UUID             string   `json:"uuid" yaml:"uuid"`
+	RobotCode        string   `json:"robot_code" yaml:"robot_code"`
+	RobotModel       string   `json:"robot_model" yaml:"robot_model"`
+	DashboardURL     string   `json:"dashboard_url" yaml:"dashboard_url"`
+	Token            string   `json:"token" yaml:"token"`
+	ReportInterval   Duration `json:"report_interval" yaml:"report_interval"`
+	HTTPTimeout      Duration `json:"http_timeout" yaml:"http_timeout"`
+	RawBatchInterval Duration `json:"raw_batch_interval" yaml:"raw_batch_interval"`
+	RawCacheBytes    int64    `json:"raw_cache_bytes" yaml:"raw_cache_bytes"`
 }
 
 type SystemConfig struct {
@@ -76,37 +78,21 @@ type GPUConfig struct {
 }
 
 type MotorConfig struct {
-	Enabled           bool                       `json:"enabled" yaml:"enabled"`
-	Topic             string                     `json:"topic" yaml:"topic"`
-	MessageType       string                     `json:"message_type" yaml:"message_type"`
-	ROSSetup          []string                   `json:"ros_setup" yaml:"ros_setup"`
-	ROSEnvironment    map[string]string          `json:"ros_environment" yaml:"ros_environment"`
-	ROSUser           string                     `json:"ros_user" yaml:"ros_user"`
-	ReadTimeout       Duration                   `json:"read_timeout" yaml:"read_timeout"`
-	FastSampleRateHz  float64                    `json:"fast_sample_rate_hz" yaml:"fast_sample_rate_hz"`
-	FastBufferSeconds int                        `json:"fast_buffer_seconds" yaml:"fast_buffer_seconds"`
-	FastBatchInterval Duration                   `json:"fast_batch_interval" yaml:"fast_batch_interval"`
-	JointLabels       map[string]string          `json:"joint_labels" yaml:"joint_labels"`
-	Definitions       map[string]MotorDefinition `json:"definitions" yaml:"definitions"`
-}
-
-type MotorDefinition struct {
-	Brand        string `json:"brand" yaml:"brand"`
-	Model        string `json:"model" yaml:"model"`
-	CANInterface string `json:"can_interface" yaml:"can_interface"`
-	ControlMode  string `json:"control_mode" yaml:"control_mode"`
-	VirtualJoint bool   `json:"virtual_joint" yaml:"virtual_joint"`
+	Enabled        bool              `json:"enabled" yaml:"enabled"`
+	Topic          string            `json:"topic" yaml:"topic"`
+	MessageType    string            `json:"message_type" yaml:"message_type"`
+	ROSSetup       []string          `json:"ros_setup" yaml:"ros_setup"`
+	ROSEnvironment map[string]string `json:"ros_environment" yaml:"ros_environment"`
+	ROSUser        string            `json:"ros_user" yaml:"ros_user"`
 }
 
 type BMSConfig struct {
 	Enabled        bool              `json:"enabled" yaml:"enabled"`
-	Protocol       string            `json:"protocol" yaml:"protocol"`
 	ROSTopic       string            `json:"ros_topic" yaml:"ros_topic"`
 	ROSMessageType string            `json:"ros_message_type" yaml:"ros_message_type"`
 	ROSSetup       []string          `json:"ros_setup" yaml:"ros_setup"`
 	ROSEnvironment map[string]string `json:"ros_environment" yaml:"ros_environment"`
 	ROSUser        string            `json:"ros_user" yaml:"ros_user"`
-	ReadTimeout    Duration          `json:"read_timeout" yaml:"read_timeout"`
 }
 
 type UpdateConfig struct {
@@ -117,8 +103,6 @@ type UpdateConfig struct {
 type fileUpdateConfig struct {
 	Enabled       bool     `yaml:"enabled"`
 	CheckInterval Duration `yaml:"check_interval"`
-	// Accepted only so existing installations can read their old configuration.
-	Automatic *bool `yaml:"automatic,omitempty"`
 }
 
 // fileConfig deliberately excludes motor and BMS sections. Robot capability is
@@ -133,19 +117,23 @@ type fileConfig struct {
 }
 
 type fileAgentConfig struct {
-	UUID           string   `yaml:"uuid"`
-	RobotCode      string   `yaml:"robot_code"`
-	DashboardURL   string   `yaml:"dashboard_url"`
-	Token          string   `yaml:"token"`
-	ReportInterval Duration `yaml:"report_interval"`
-	HTTPTimeout    Duration `yaml:"http_timeout"`
+	UUID             string   `yaml:"uuid"`
+	RobotCode        string   `yaml:"robot_code"`
+	DashboardURL     string   `yaml:"dashboard_url"`
+	Token            string   `yaml:"token"`
+	ReportInterval   Duration `yaml:"report_interval"`
+	HTTPTimeout      Duration `yaml:"http_timeout"`
+	RawBatchInterval Duration `yaml:"raw_batch_interval"`
+	RawCacheBytes    int64    `yaml:"raw_cache_bytes"`
 }
 
 func Default() Config {
 	return Config{
 		Agent: AgentConfig{
-			ReportInterval: Duration(2 * time.Second),
-			HTTPTimeout:    Duration(10 * time.Second),
+			ReportInterval:   Duration(2 * time.Second),
+			HTTPTimeout:      Duration(10 * time.Second),
+			RawBatchInterval: Duration(2 * time.Second),
+			RawCacheBytes:    256 << 20,
 		},
 		System: SystemConfig{Enabled: true, DiskPaths: []string{"/"}},
 		GPU: GPUConfig{
@@ -156,21 +144,14 @@ func Default() Config {
 			Timeout: Duration(3 * time.Second),
 		},
 		Motor: MotorConfig{
-			Topic:             "/motor/joint_states",
-			MessageType:       "sensor_msgs/msg/JointState",
-			ROSSetup:          []string{"/opt/ros/humble/setup.bash"},
-			ReadTimeout:       Duration(3 * time.Second),
-			FastSampleRateHz:  0,
-			FastBufferSeconds: 15,
-			JointLabels:       map[string]string{},
-			Definitions:       make(map[string]MotorDefinition),
+			Topic:       "/motor/joint_states",
+			MessageType: "sensor_msgs/msg/JointState",
+			ROSSetup:    []string{"/opt/ros/humble/setup.bash"},
 		},
 		BMS: BMSConfig{
-			Protocol:       "batcan_diagnostic_array",
 			ROSTopic:       "/batcan/data",
 			ROSMessageType: "diagnostic_msgs/msg/DiagnosticArray",
 			ROSSetup:       []string{"/opt/ros/humble/setup.bash"},
-			ReadTimeout:    Duration(3 * time.Second),
 		},
 		Update: UpdateConfig{
 			Enabled:       true,
@@ -214,6 +195,7 @@ func Load(path string) (Config, error) {
 		UUID: file.Agent.UUID, RobotCode: file.Agent.RobotCode, RobotModel: file.Model,
 		DashboardURL: file.Agent.DashboardURL, Token: file.Agent.Token,
 		ReportInterval: file.Agent.ReportInterval, HTTPTimeout: file.Agent.HTTPTimeout,
+		RawBatchInterval: file.Agent.RawBatchInterval, RawCacheBytes: file.Agent.RawCacheBytes,
 	}
 	if file.System != nil {
 		cfg.System = *file.System
@@ -232,7 +214,8 @@ func Marshal(cfg Config) ([]byte, error) {
 		Model: cfg.Agent.RobotModel,
 		Agent: fileAgentConfig{UUID: cfg.Agent.UUID, RobotCode: cfg.Agent.RobotCode,
 			DashboardURL: cfg.Agent.DashboardURL, Token: cfg.Agent.Token,
-			ReportInterval: cfg.Agent.ReportInterval, HTTPTimeout: cfg.Agent.HTTPTimeout},
+			ReportInterval: cfg.Agent.ReportInterval, HTTPTimeout: cfg.Agent.HTTPTimeout,
+			RawBatchInterval: cfg.Agent.RawBatchInterval, RawCacheBytes: cfg.Agent.RawCacheBytes},
 		System: &cfg.System, GPU: &cfg.GPU,
 		Update: &fileUpdateConfig{Enabled: cfg.Update.Enabled, CheckInterval: cfg.Update.CheckInterval},
 	})
@@ -245,6 +228,12 @@ func build(cfg Config) (Config, error) {
 	}
 	if cfg.Agent.HTTPTimeout.Value() == 0 {
 		cfg.Agent.HTTPTimeout = defaults.Agent.HTTPTimeout
+	}
+	if cfg.Agent.RawBatchInterval.Value() == 0 {
+		cfg.Agent.RawBatchInterval = defaults.Agent.RawBatchInterval
+	}
+	if cfg.Agent.RawCacheBytes == 0 {
+		cfg.Agent.RawCacheBytes = defaults.Agent.RawCacheBytes
 	}
 	if cfg.System.DiskPaths == nil {
 		cfg.System.DiskPaths = defaults.System.DiskPaths
@@ -294,6 +283,12 @@ func (c *Config) Validate() error {
 	if c.Agent.HTTPTimeout.Value() <= 0 {
 		return errors.New("agent.http_timeout must be positive")
 	}
+	if c.Agent.RawBatchInterval.Value() < 250*time.Millisecond {
+		return errors.New("agent.raw_batch_interval must be at least 250ms")
+	}
+	if c.Agent.RawCacheBytes < 1<<20 {
+		return errors.New("agent.raw_cache_bytes must be at least 1MiB")
+	}
 	for _, path := range c.System.DiskPaths {
 		if !filepath.IsAbs(path) {
 			return fmt.Errorf("system disk path %q is not absolute", path)
@@ -309,18 +304,6 @@ func (c *Config) Validate() error {
 		if !topicPattern.MatchString(c.Motor.Topic) || !messagePattern.MatchString(c.Motor.MessageType) {
 			return errors.New("motor topic or message_type is invalid")
 		}
-		if c.Motor.ReadTimeout.Value() <= 0 {
-			return errors.New("motor.read_timeout must be positive")
-		}
-		if c.Motor.FastSampleRateHz < 0 || c.Motor.FastSampleRateHz > 500 {
-			return errors.New("motor.fast_sample_rate_hz must be between 0 and 500")
-		}
-		if c.Motor.FastSampleRateHz > 0 && (c.Motor.FastBufferSeconds < 1 || c.Motor.FastBufferSeconds > 60) {
-			return errors.New("motor.fast_buffer_seconds must be between 1 and 60 when fast sampling is enabled")
-		}
-		if c.Motor.FastSampleRateHz > 0 && (c.Motor.FastBatchInterval.Value() < time.Second || c.Motor.FastBatchInterval.Value() > time.Minute) {
-			return errors.New("motor.fast_batch_interval must be between 1s and 1m when fast sampling is enabled")
-		}
 	}
 	if c.BMS.Enabled {
 		if err := validateROSEnvironment("bms", c.BMS.ROSEnvironment); err != nil {
@@ -329,16 +312,10 @@ func (c *Config) Validate() error {
 		if err := validateROSUser("bms", c.BMS.ROSUser); err != nil {
 			return err
 		}
-		c.BMS.Protocol = strings.ToLower(c.BMS.Protocol)
-		if c.BMS.Protocol == "" {
-			return errors.New("bms.protocol must not be empty")
-		}
 		if !topicPattern.MatchString(c.BMS.ROSTopic) || !messagePattern.MatchString(c.BMS.ROSMessageType) {
 			return errors.New("BMS ROS2 topic or message_type is invalid")
 		}
-		if c.BMS.ReadTimeout.Value() <= 0 {
-			return errors.New("bms.read_timeout must be positive")
-		}
+
 	}
 	if c.Update.Enabled && c.Update.CheckInterval.Value() < 10*time.Second {
 		return errors.New("update.check_interval must be at least 10s")

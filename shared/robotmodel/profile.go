@@ -44,17 +44,14 @@ type ModelConfig struct {
 }
 
 type MotorConfig struct {
-	Enabled           bool                   `yaml:"enabled"`
-	Topic             string                 `yaml:"topic"`
-	MessageType       string                 `yaml:"message_type"`
-	ROSSetup          []string               `yaml:"ros_setup"`
-	ROSEnvironment    map[string]string      `yaml:"ros_environment"`
-	ROSUser           string                 `yaml:"ros_user"`
-	ReadTimeout       Duration               `yaml:"read_timeout"`
-	FastSampleRateHz  float64                `yaml:"fast_sample_rate_hz"`
-	FastBufferSeconds int                    `yaml:"fast_buffer_seconds"`
-	FastBatchInterval Duration               `yaml:"fast_batch_interval"`
-	Joints            map[string]JointConfig `yaml:"joints"`
+	Enabled        bool                   `yaml:"enabled"`
+	Topic          string                 `yaml:"topic"`
+	MessageType    string                 `yaml:"message_type"`
+	ROSSetup       []string               `yaml:"ros_setup"`
+	ROSEnvironment map[string]string      `yaml:"ros_environment"`
+	ROSUser        string                 `yaml:"ros_user"`
+	ReadTimeout    Duration               `yaml:"read_timeout"`
+	Joints         map[string]JointConfig `yaml:"joints"`
 }
 
 type JointConfig struct {
@@ -179,15 +176,6 @@ func validateMotor(motor MotorConfig) error {
 	}
 	if motor.ReadTimeout.Value() <= 0 {
 		return errors.New("motor.read_timeout must be positive")
-	}
-	if motor.FastSampleRateHz < 0 || motor.FastSampleRateHz > 500 {
-		return errors.New("motor.fast_sample_rate_hz must be between 0 and 500")
-	}
-	if motor.FastSampleRateHz > 0 && (motor.FastBufferSeconds < 1 || motor.FastBufferSeconds > 60) {
-		return errors.New("motor.fast_buffer_seconds must be between 1 and 60 when enabled")
-	}
-	if motor.FastSampleRateHz > 0 && (motor.FastBatchInterval.Value() < time.Second || motor.FastBatchInterval.Value() > time.Minute) {
-		return errors.New("motor.fast_batch_interval must be between 1s and 1m when enabled")
 	}
 	if err := validateROS(motor.ROSSetup, motor.ROSEnvironment, motor.ROSUser); err != nil {
 		return fmt.Errorf("motor: %w", err)

@@ -22,7 +22,7 @@ type UpdateDownloader interface {
 	Download(context.Context, model.UpdateInfo, io.Writer) error
 }
 
-func ApplyUpdate(ctx context.Context, client UpdateDownloader, update model.UpdateInfo) error {
+func ApplyUpdate(ctx context.Context, client UpdateDownloader, update model.UpdateInfo, beforeReplace func() error) error {
 	if update.OS != runtime.GOOS || update.Arch != runtime.GOARCH {
 		return fmt.Errorf("update platform %s/%s does not match %s/%s", update.OS, update.Arch, runtime.GOOS, runtime.GOARCH)
 	}
@@ -34,10 +34,10 @@ func ApplyUpdate(ctx context.Context, client UpdateDownloader, update model.Upda
 	if err != nil {
 		return err
 	}
-	return applyUpdate(ctx, client, update, executable, os.Args, os.Environ(), syscall.Exec)
+	return applyUpdate(ctx, client, update, executable, os.Args, os.Environ(), syscall.Exec, beforeReplace)
 }
 
-func applyUpdate(ctx context.Context, client UpdateDownloader, update model.UpdateInfo, executable string, arguments, environment []string, execute func(string, []string, []string) error) error {
+func applyUpdate(ctx context.Context, client UpdateDownloader, update model.UpdateInfo, executable string, arguments, environment []string, execute func(string, []string, []string) error, beforeReplace func() error) error {
 	info, err := os.Stat(executable)
 	if err != nil {
 		return err
@@ -87,6 +87,13 @@ func applyUpdate(ctx context.Context, client UpdateDownloader, update model.Upda
 	args = append(args, "--check-config")
 	if output, err := exec.CommandContext(checkCtx, temporaryPath, args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("updated Agent rejected current configuration: %w: %.4096s", err, output)
+	}
+	// Downloads and validation do not interrupt collection. Stop and persist
+	// producers only once the candidate is ready for process replacement.
+	if beforeReplace != nil {
+		if err := beforeReplace(); err != nil {
+			return fmt.Errorf("prepare update handoff: %w", err)
+		}
 	}
 	if err := os.Link(executable, executable+".previous"); err != nil {
 		return fmt.Errorf("preserve previous Agent: %w", err)
