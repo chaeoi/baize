@@ -11,6 +11,7 @@ robot_model=${BAIZE_ROBOT_MODEL:-}
 robot_uuid=${BAIZE_AGENT_UUID:-}
 force_config=false
 config_path=${BAIZE_CONFIG_PATH:-/opt/baize/agent/config.yml}
+legacy_ros2_subscribers="/opt/baize/agent/baize-ros2-subscriber /var/lib/baize-agent/baize-ros2-subscriber"
 
 tty=/dev/tty
 
@@ -51,6 +52,14 @@ EOF
 die() {
 	echo "baize-agent installer: $*" >&2
 	exit 1
+}
+
+cleanup_legacy_ros2_subscribers() {
+	for path in $legacy_ros2_subscribers; do
+		if [ -e "$path" ] || [ -L "$path" ]; then
+			rm -f -- "$path" || die "remove legacy ROS2 subscriber $path failed"
+		fi
+	done
 }
 
 while [ "$#" -gt 0 ]; do
@@ -151,4 +160,7 @@ set --
 [ -z "$robot_model" ] || set -- "$@" --robot-model "$robot_model"
 [ -z "$robot_uuid" ] || set -- "$@" --uuid "$robot_uuid"
 [ "$force_config" = false ] || set -- "$@" --force-config
+# New Agents keep the ROS2 helper in memory. Remove files created by older
+# installers before handing control to the binary.
+cleanup_legacy_ros2_subscribers
 "$tmp_dir/$asset" service install "$@"
