@@ -183,9 +183,9 @@ sudo /opt/baize/agent/baize-agent service uninstall
 ```
 
 支持的模型、ROS2 topic、关节标签与电机元数据均编入 Agent；不支持的型号会在
-安装校验阶段失败。Agent Release 内置按架构编译的 C++ `rclcpp` 订阅器，安装及
-自动升级时释放到 Agent 的 systemd 状态目录。它长期监听 topic 并输出紧凑数据，
-不依赖 Python、`rclpy` 或 `ros2 topic echo`：
+安装校验阶段失败。Agent Release 内置按架构编译的 C++ `rclcpp` 订阅器，从匿名内存
+启动并长期监听 topic，安装目录只保留 Agent 二进制和配置，不依赖 Python、`rclpy`
+或 `ros2 topic echo`：
 
 - 电机：`/motor/q2w_upper_motor_joint_state`，`sensor_msgs/msg/JointState`
 - 电池：`/batcan/data`，`diagnostic_msgs/msg/DiagnosticArray`
