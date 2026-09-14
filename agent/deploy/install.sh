@@ -123,9 +123,6 @@ if [ -r "$config_path" ] && "$tmp_dir/$asset" --config "$config_path" --check-co
 	existing_config=true
 fi
 if [ "$existing_config" = false ]; then
-	if [ -z "$robot_uuid" ] && [ -r "$config_path" ]; then
-		robot_uuid=$(awk '$1 == "uuid:" {print $2; exit}' "$config_path" | tr -d '"' | tr -d "'")
-	fi
 	if [ -z "$dashboard_url" ] && [ -r "$tty" ] && [ -w "$tty" ]; then
 		dashboard_url=$(prompt "Dashboard URL" "https://baize.example.com")
 	fi
