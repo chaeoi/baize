@@ -101,9 +101,9 @@ class Subscriber final : public rclcpp::Node {
 std::chrono::milliseconds parseReadTimeout(const std::string &value) {
   if (value.size() < 3) throw std::invalid_argument("read-timeout must include a duration suffix");
   std::size_t suffix_start = value.size();
-  while (suffix_start > 0 && std::isalpha(static_cast<unsigned char>(value[suffix_start - 1]))) {
-    --suffix_start;
-  }
+  if (value.size() >= 2 && value.substr(value.size() - 2) == "ms") suffix_start -= 2;
+  else if (std::isalpha(static_cast<unsigned char>(value.back()))) suffix_start -= 1;
+  else throw std::invalid_argument("read-timeout must include a duration suffix");
   if (suffix_start == 0) throw std::invalid_argument("read-timeout must start with a number");
   const auto number = std::stod(value.substr(0, suffix_start));
   if (!std::isfinite(number) || number <= 0) throw std::invalid_argument("read-timeout must be positive");
