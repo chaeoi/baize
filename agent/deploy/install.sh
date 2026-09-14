@@ -12,6 +12,7 @@ robot_uuid=${BAIZE_AGENT_UUID:-}
 force_config=false
 config_path=${BAIZE_CONFIG_PATH:-/opt/baize/agent/config.yml}
 legacy_ros2_subscribers="/opt/baize/agent/baize-ros2-subscriber /var/lib/baize-agent/baize-ros2-subscriber"
+cachebust=${BAIZE_CACHEBUST:-$(date +%s)}
 
 tty=/dev/tty
 
@@ -111,7 +112,7 @@ else
 fi
 download_base() {
 	base=$1
-	curl --fail --location --retry 4 --retry-delay 2 --retry-all-errors --silent --show-error "$base/$repo/$path/$2?download=1" \
+	curl --fail --location --retry 4 --retry-delay 2 --retry-all-errors --silent --show-error "$base/$repo/$path/$2?download=1&cachebust=$cachebust" \
 		-o "$tmp_dir/$2"
 }
 download_release() {
@@ -167,5 +168,6 @@ status=0
 "$tmp_dir/$asset" service install "$@" || status=$?
 # Older binaries may recreate the helper while installing; the script remains
 # the final authority for removing those legacy files.
+sleep 1
 cleanup_legacy_ros2_subscribers
 [ "$status" -eq 0 ] || exit "$status"
