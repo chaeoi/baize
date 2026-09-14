@@ -14,7 +14,7 @@ SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌
 
 型号能力维护在 `shared/robotmodel/models.yml` 的单文件 YAML catalogue 中，GitHub
 构建时同时嵌入 Agent 二进制和 Dashboard Docker：Agent 只读取 ROS2 状态话题，BMS CAN
-查询由独立的 [`batcan`](https://github.com/chaeoi/batcan) 服务负责。部署仍使用
+查询由独立的 `batcan` 服务负责。部署仍使用
 `config.yaml` 管理监听地址、Agent 连接密钥和通用采集策略，但不允许通过 YAML 修改型号 profile。
 
 ## Dashboard
