@@ -407,7 +407,7 @@ function renderRobotList() {
     const metric = (label, value, sub, level) => `<div class="robot-card-metric"><span>${label}</span><strong>${value}</strong><div class="meter"><i class="${meterClass(level)}"></i></div><small>${sub}</small></div>`;
     return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="${escapeHTML(publicRouteURL(robot.id, defaultPublicHistoryRoute()))}">
       <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong>${remark ? `<small>${escapeHTML(remark)}</small>` : ''}</div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
-      <div class="robot-card-meta"><time>${online ? relativeTime(robot.last_seen) : `最后上报 ${formatDate(robot.last_seen)}`}</time></div>
+      <div class="robot-card-meta"><time>${online ? '实时上报中' : relativeTime(robot.last_seen)}</time></div>
       <div class="robot-card-metrics">
         ${metric('CPU', online && summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', online && summary.has_telemetry ? `负载 ${fixed(summary.load_1)}` : '暂无数据', online && summary.has_telemetry ? summary.cpu_percent : NaN)}
         ${metric('内存', online && summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', online && summary.has_telemetry ? '系统内存' : '暂无数据', online && summary.has_telemetry ? summary.memory_percent : NaN)}
@@ -1258,8 +1258,6 @@ function updatePublicLiveState() {
     card.querySelector('.robot-presence')?.classList.toggle('online', active);
     const label = card.querySelector('.status-label');
     if (label) { label.textContent = active ? '在线' : '离线'; label.classList.toggle('online', active); }
-    const time = card.querySelector('time');
-    if (time) time.textContent = relativeTime(robot.last_seen);
   });
 }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN', { hour12: false }); }
