@@ -407,7 +407,6 @@ function renderRobotList() {
     const metric = (label, value, sub, level) => `<div class="robot-card-metric"><span>${label}</span><strong>${value}</strong><div class="meter"><i class="${meterClass(level)}"></i></div><small>${sub}</small></div>`;
     return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="${escapeHTML(publicRouteURL(robot.id, defaultPublicHistoryRoute()))}">
       <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong>${remark ? `<small>${escapeHTML(remark)}</small>` : ''}</div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
-      <div class="robot-card-meta"><time>${online ? '实时上报中' : relativeTime(robot.last_seen)}</time></div>
       <div class="robot-card-metrics">
         ${metric('CPU', online && summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', online && summary.has_telemetry ? `负载 ${fixed(summary.load_1)}` : '暂无数据', online && summary.has_telemetry ? summary.cpu_percent : NaN)}
         ${metric('内存', online && summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', online && summary.has_telemetry ? '系统内存' : '暂无数据', online && summary.has_telemetry ? summary.memory_percent : NaN)}
@@ -434,7 +433,6 @@ function renderPublicDetail(robot) {
   $('#robot-status').classList.toggle('online', online);
   $('#detail-beacon').classList.toggle('online', online);
   $('#robot-last-seen').textContent = online ? '' : `最后上报 ${formatDate(robot.last_seen)}`;
-  $('#detail-updated-text').textContent = online ? `采集于 ${formatDate(robot.collected_at)} · ${relativeTime(robot.last_seen)}收到` : `最后上报 ${formatDate(robot.last_seen)}`;
   const hasTelemetry = online && Boolean(summary.has_telemetry);
   setMetric('cpu', hasTelemetry ? summary.cpu_percent : NaN, hasTelemetry ? `${fixed(summary.cpu_percent)}%` : '--', hasTelemetry ? `负载 ${fixed(summary.load_1)}` : '暂无数据');
   setMetric('memory', hasTelemetry ? summary.memory_percent : NaN, hasTelemetry ? `${fixed(summary.memory_percent)}%` : '--', hasTelemetry ? '内存占用' : '暂无数据');
@@ -1240,7 +1238,6 @@ function updatePublicLiveState() {
   if (selected) {
     const online = isPublicOnline(selected);
     $('#robot-last-seen').textContent = online ? '' : `最后上报 ${formatDate(selected.last_seen)}`;
-    $('#detail-updated-text').textContent = online ? `采集于 ${formatDate(selected.collected_at)} · ${relativeTime(selected.last_seen)}收到` : `最后上报 ${formatDate(selected.last_seen)}`;
     $('#robot-status').textContent = online ? '在线运行' : '离线';
     $('#robot-status').classList.toggle('online', online);
     $('#detail-beacon').classList.toggle('online', online);
