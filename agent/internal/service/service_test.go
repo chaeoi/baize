@@ -195,23 +195,14 @@ func TestServiceUnitRunsInstalledBinaryWithConfig(t *testing.T) {
 	}
 }
 
-func TestPrepareROS2SubscriberMaterializesEmbeddedAsset(t *testing.T) {
-	directory := t.TempDir()
+func TestPrepareROS2SubscriberUsesAnonymousAsset(t *testing.T) {
 	t.Setenv("BAIZE_ROS2_SUBSCRIBER", "")
-	t.Setenv("STATE_DIRECTORY", directory)
+	t.Setenv("BAIZE_ROS2_SUBSCRIBER_FD", "")
 	path, err := PrepareROS2Subscriber()
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(content) != string(embeddedROS2Subscriber) || info.Mode().Perm() != 0o755 {
-		t.Fatalf("unexpected materialized ROS2 subscriber: path=%s mode=%o", path, info.Mode().Perm())
+	if path != "/proc/self/fd/3" || os.Getenv("BAIZE_ROS2_SUBSCRIBER_FD") == "" || ros2SubscriberMemfd == nil {
+		t.Fatalf("unexpected anonymous ROS2 subscriber: path=%s fd=%s", path, os.Getenv("BAIZE_ROS2_SUBSCRIBER_FD"))
 	}
 }
