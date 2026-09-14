@@ -1,3 +1,5 @@
+#include <cmath>
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -7,6 +9,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -67,22 +70,60 @@ void emitRaw(const std::shared_ptr<rclcpp::SerializedMessage> &message) {
 
 class Subscriber final : public rclcpp::Node {
  public:
-  Subscriber(const std::string &topic, const std::string &message_type)
-      : Node("baize_agent_subscriber") {
+  Subscriber(const std::string &topic, const std::string &message_type, std::chrono::milliseconds read_timeout)
+      : Node("baize_agent_subscriber"), last_message_(this->get_clock()->now()), read_timeout_(read_timeout) {
     const auto qos = message_type == "sensor_msgs/msg/JointState"
                          ? rclcpp::SensorDataQoS().keep_last(256)
                          : rclcpp::QoS(100);
     subscription_ = create_generic_subscription(
         topic, message_type, qos,
-        [](std::shared_ptr<rclcpp::SerializedMessage> message) { emitRaw(message); });
+        [this](std::shared_ptr<rclcpp::SerializedMessage> message) {
+          last_message_ = this->get_clock()->now();
+          emitRaw(message);
+        });
+    watchdog_ = create_wall_timer(std::chrono::seconds(1), [this]() {
+      if ((this->get_clock()->now() - last_message_).seconds() >=
+          std::chrono::duration<double>(read_timeout_).count()) {
+        RCLCPP_WARN(this->get_logger(), "no messages received for %lldms; restarting subscription",
+                    static_cast<long long>(read_timeout_.count()));
+        rclcpp::shutdown();
+      }
+    });
   }
 
  private:
   std::shared_ptr<rclcpp::GenericSubscription> subscription_;
+  rclcpp::TimerBase::SharedPtr watchdog_;
+  rclcpp::Time last_message_;
+  std::chrono::milliseconds read_timeout_;
 };
+
+std::chrono::milliseconds parseReadTimeout(const std::string &value) {
+  if (value.size() < 3) throw std::invalid_argument("read-timeout must include a duration suffix");
+  std::size_t suffix_start = value.size();
+  while (suffix_start > 0 && std::isalpha(static_cast<unsigned char>(value[suffix_start - 1]))) {
+    --suffix_start;
+  }
+  if (suffix_start == 0) throw std::invalid_argument("read-timeout must start with a number");
+  const auto number = std::stod(value.substr(0, suffix_start));
+  if (!std::isfinite(number) || number <= 0) throw std::invalid_argument("read-timeout must be positive");
+  const auto suffix = value.substr(suffix_start);
+  double multiplier = 0;
+  if (suffix == "ms") multiplier = 1;
+  else if (suffix == "s") multiplier = 1000;
+  else if (suffix == "m") multiplier = 60 * 1000;
+  else if (suffix == "h") multiplier = 60 * 60 * 1000;
+  else throw std::invalid_argument("read-timeout suffix must be ms, s, m, or h");
+  const auto milliseconds = number * multiplier;
+  if (milliseconds < 1 || milliseconds > static_cast<double>(std::numeric_limits<long long>::max())) {
+    throw std::invalid_argument("read-timeout is out of range");
+  }
+  return std::chrono::milliseconds(static_cast<long long>(milliseconds));
+}
 
 void usage(std::ostream &output) {
   output << "Usage: baize-ros2-subscriber --topic TOPIC --message-type TYPE\n"
+         << "       --read-timeout DURATION (for example 5s)\n"
          << "       baize-ros2-subscriber --version\n";
 }
 
@@ -93,6 +134,7 @@ int main(int argc, char **argv) {
   try {
     std::string topic;
     std::string message_type;
+    std::chrono::milliseconds read_timeout(5000);
     for (int index = 1; index < argc; ++index) {
       const std::string argument = argv[index];
       if (argument == "--version") {
@@ -107,6 +149,8 @@ int main(int argc, char **argv) {
         topic = argv[++index];
       } else if (argument == "--message-type" && index + 1 < argc) {
         message_type = argv[++index];
+      } else if (argument == "--read-timeout" && index + 1 < argc) {
+        read_timeout = parseReadTimeout(argv[++index]);
       } else {
         throw std::invalid_argument("unknown or incomplete option: " + argument);
       }
@@ -116,7 +160,7 @@ int main(int argc, char **argv) {
       return 2;
     }
     rclcpp::init(0, nullptr);
-    auto node = std::make_shared<Subscriber>(topic, message_type);
+    auto node = std::make_shared<Subscriber>(topic, message_type, read_timeout);
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;

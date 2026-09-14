@@ -6,7 +6,7 @@ import (
 )
 
 func TestROSCommandExportsEnvironment(t *testing.T) {
-	command, err := rosCommand(nil, map[string]string{"ROS_LOCALHOST_ONLY": "1"}, "", "baize-ros2-subscriber --topic '/motor/state'")
+	command, err := rosCommand(nil, map[string]string{"ROS_LOCALHOST_ONLY": "1"}, "", "baize-ros2-subscriber --topic '/motor/state' --read-timeout '5s'")
 	if err != nil {
 		t.Fatal(err)
 	}

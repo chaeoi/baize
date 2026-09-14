@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 var rosEnvironmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
@@ -13,7 +14,7 @@ var rosUserNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
 const defaultROS2SubscriberBinary = "/opt/baize/agent/baize-ros2-subscriber"
 
-func rosSubscriberCommand(setup []string, environment map[string]string, user, topic, messageType string) (string, error) {
+func rosSubscriberCommand(setup []string, environment map[string]string, user, topic, messageType string, readTimeout time.Duration) (string, error) {
 	if topic == "" || messageType == "" {
 		return "", fmt.Errorf("ROS2 subscriber topic and message type are required")
 	}
@@ -22,7 +23,8 @@ func rosSubscriberCommand(setup []string, environment map[string]string, user, t
 		binary = defaultROS2SubscriberBinary
 	}
 	arguments := shellQuote(binary) +
-		" --topic " + shellQuote(topic) + " --message-type " + shellQuote(messageType)
+		" --topic " + shellQuote(topic) + " --message-type " + shellQuote(messageType) +
+		" --read-timeout " + shellQuote(readTimeout.String())
 	return rosCommand(setup, environment, user, arguments)
 }
 
