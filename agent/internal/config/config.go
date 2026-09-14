@@ -81,6 +81,7 @@ type MotorConfig struct {
 	Enabled        bool              `json:"enabled" yaml:"enabled"`
 	Topic          string            `json:"topic" yaml:"topic"`
 	MessageType    string            `json:"message_type" yaml:"message_type"`
+	ReadTimeout    Duration          `json:"read_timeout" yaml:"read_timeout"`
 	ROSSetup       []string          `json:"ros_setup" yaml:"ros_setup"`
 	ROSEnvironment map[string]string `json:"ros_environment" yaml:"ros_environment"`
 	ROSUser        string            `json:"ros_user" yaml:"ros_user"`
@@ -90,6 +91,7 @@ type BMSConfig struct {
 	Enabled        bool              `json:"enabled" yaml:"enabled"`
 	ROSTopic       string            `json:"ros_topic" yaml:"ros_topic"`
 	ROSMessageType string            `json:"ros_message_type" yaml:"ros_message_type"`
+	ReadTimeout    Duration          `json:"read_timeout" yaml:"read_timeout"`
 	ROSSetup       []string          `json:"ros_setup" yaml:"ros_setup"`
 	ROSEnvironment map[string]string `json:"ros_environment" yaml:"ros_environment"`
 	ROSUser        string            `json:"ros_user" yaml:"ros_user"`

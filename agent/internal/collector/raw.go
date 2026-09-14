@@ -19,8 +19,8 @@ const rawFrameHeaderSize = 17
 // StreamRawTopic keeps ROS2 serialization out of the Agent's data model. The
 // helper receives and forwards the middleware's serialized CDR bytes; the
 // dashboard owns decoding and storage.
-func StreamRawTopic(ctx context.Context, setup []string, environment map[string]string, user, topic, messageType string, output chan<- rawstream.Record) (result error) {
-	command, err := rosSubscriberCommand(setup, environment, user, topic, messageType)
+func StreamRawTopic(ctx context.Context, setup []string, environment map[string]string, user, topic, messageType string, readTimeout time.Duration, output chan<- rawstream.Record) (result error) {
+	command, err := rosSubscriberCommand(setup, environment, user, topic, messageType, readTimeout)
 	if err != nil {
 		return err
 	}

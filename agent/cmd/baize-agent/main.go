@@ -130,12 +130,12 @@ func run(ctx context.Context, cfg config.Config) error {
 	defer stopSources()
 	records := make(chan rawstream.Record, 256)
 	var sources sync.WaitGroup
-	startTopic := func(topic, messageType string, setup []string, environment map[string]string, user string) {
+	startTopic := func(topic, messageType string, readTimeout time.Duration, setup []string, environment map[string]string, user string) {
 		sources.Add(1)
 		go func() {
 			defer sources.Done()
 			for sourceCtx.Err() == nil {
-				err := collector.StreamRawTopic(sourceCtx, setup, environment, user, topic, messageType, records)
+				err := collector.StreamRawTopic(sourceCtx, setup, environment, user, topic, messageType, readTimeout, records)
 				if sourceCtx.Err() != nil {
 					return
 				}
@@ -151,10 +151,10 @@ func run(ctx context.Context, cfg config.Config) error {
 		}()
 	}
 	if cfg.Motor.Enabled {
-		startTopic(cfg.Motor.Topic, cfg.Motor.MessageType, cfg.Motor.ROSSetup, cfg.Motor.ROSEnvironment, cfg.Motor.ROSUser)
+		startTopic(cfg.Motor.Topic, cfg.Motor.MessageType, cfg.Motor.ReadTimeout.Value(), cfg.Motor.ROSSetup, cfg.Motor.ROSEnvironment, cfg.Motor.ROSUser)
 	}
 	if cfg.BMS.Enabled {
-		startTopic(cfg.BMS.ROSTopic, cfg.BMS.ROSMessageType, cfg.BMS.ROSSetup, cfg.BMS.ROSEnvironment, cfg.BMS.ROSUser)
+		startTopic(cfg.BMS.ROSTopic, cfg.BMS.ROSMessageType, cfg.BMS.ReadTimeout.Value(), cfg.BMS.ROSSetup, cfg.BMS.ROSEnvironment, cfg.BMS.ROSUser)
 	}
 	sources.Add(1)
 	go func() {
