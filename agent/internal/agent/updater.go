@@ -114,7 +114,7 @@ func applyUpdate(ctx context.Context, client UpdateDownloader, update model.Upda
 	if os.Getenv("BAIZE_MANAGED_SUBSCRIBER") == "1" {
 		filtered := make([]string, 0, len(environment))
 		for _, variable := range environment {
-			if !strings.HasPrefix(variable, "BAIZE_ROS2_SUBSCRIBER=") && !strings.HasPrefix(variable, "BAIZE_MANAGED_SUBSCRIBER=") {
+			if !strings.HasPrefix(variable, "BAIZE_ROS2_SUBSCRIBER=") && !strings.HasPrefix(variable, "BAIZE_ROS2_SUBSCRIBER_FD=") && !strings.HasPrefix(variable, "BAIZE_MANAGED_SUBSCRIBER=") {
 				filtered = append(filtered, variable)
 			}
 		}

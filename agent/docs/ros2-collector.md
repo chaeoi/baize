@@ -23,9 +23,10 @@ C++ compiler or a source checkout. Its dynamic dependencies can be checked with:
 ldd /var/lib/baize-agent/baize-ros2-subscriber
 ```
 
-The Agent copies the helper into `StateDirectory` during startup. This makes
-an Agent self-update update the helper atomically as well. If ROS is missing,
-the host/system collectors still run. Topic process failures are logged with
+The Agent keeps the embedded helper in an anonymous memory file during startup
+and passes it to each short-lived ROS process, so installation contains only
+the Agent binaries and no persistent helper file. If ROS is missing, the
+host/system collectors still run. Topic process failures are logged with
 bounded helper diagnostics and retried after one second. Dashboard marks the
 topics offline after the model's `read_timeout`, using receipt times rather than
 the ROS simulation clock.

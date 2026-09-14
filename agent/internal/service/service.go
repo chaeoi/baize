@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"crypto/rand"
 	_ "embed"
 	"errors"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"golang.org/x/sys/unix"
 
 	"baize/agent/internal/config"
 )
@@ -35,13 +36,14 @@ const (
 var embeddedROS2Subscriber []byte
 
 var (
-	installDir              = "/opt/baize/agent"
-	installedBinary         = filepath.Join(installDir, "baize-agent")
-	installedRuntime        = filepath.Join(installDir, "bin", "baize-agent")
-	installedROS2Subscriber = filepath.Join(installDir, "baize-ros2-subscriber")
-	installedConfig         = filepath.Join(installDir, "config.yml")
-	unitPath                = "/etc/systemd/system/baize-agent.service"
+	installDir       = "/opt/baize/agent"
+	installedBinary  = filepath.Join(installDir, "baize-agent")
+	installedRuntime = filepath.Join(installDir, "bin", "baize-agent")
+	installedConfig  = filepath.Join(installDir, "config.yml")
+	unitPath         = "/etc/systemd/system/baize-agent.service"
 )
+
+var ros2SubscriberMemfd *os.File
 
 var (
 	serviceUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -91,60 +93,37 @@ func Execute(arguments []string, executablePath string) error {
 	}
 }
 
-// PrepareROS2Subscriber materializes the embedded architecture-matched helper
-// in systemd's writable StateDirectory. This also updates the helper whenever
-// the Agent replaces itself through the dashboard updater.
+// PrepareROS2Subscriber keeps the embedded architecture-matched helper in an
+// anonymous Linux memfd. The helper is never installed as a second persistent
+// binary; the collector passes the descriptor to each short-lived process.
 func PrepareROS2Subscriber() (string, error) {
 	if override := os.Getenv("BAIZE_ROS2_SUBSCRIBER"); override != "" {
 		return override, nil
 	}
-	directory := os.Getenv("STATE_DIRECTORY")
-	if directory == "" {
-		executable, err := os.Executable()
-		if err != nil {
-			return "", err
-		}
-		candidate := filepath.Join(filepath.Dir(executable), "baize-ros2-subscriber")
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-			return candidate, nil
-		}
-		return "", fmt.Errorf("ROS2 subscriber is not installed beside %s", executable)
-	}
-	if !filepath.IsAbs(directory) || strings.ContainsAny(directory, "\x00\n\r") {
-		return "", errors.New("systemd STATE_DIRECTORY is invalid")
-	}
-	if err := os.MkdirAll(directory, 0o750); err != nil {
-		return "", err
-	}
-	destination := filepath.Join(directory, "baize-ros2-subscriber")
-	if current, err := os.ReadFile(destination); err == nil && bytes.Equal(current, embeddedROS2Subscriber) {
-		return destination, nil
-	}
-	temporary, err := os.CreateTemp(directory, ".baize-ros2-subscriber-*")
+	fd, err := unix.MemfdCreate("baize-ros2-subscriber", 0)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create ROS2 subscriber memory file: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if _, err := temporary.Write(embeddedROS2Subscriber); err != nil {
-		_ = temporary.Close()
-		return "", err
+	file := os.NewFile(uintptr(fd), "baize-ros2-subscriber")
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = file.Close()
+		}
+	}()
+	if _, err := file.Write(embeddedROS2Subscriber); err != nil {
+		return "", fmt.Errorf("write ROS2 subscriber memory file: %w", err)
 	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return "", err
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewind ROS2 subscriber memory file: %w", err)
 	}
-	if err := temporary.Chmod(0o755); err != nil {
-		_ = temporary.Close()
-		return "", err
+	ros2SubscriberMemfd = file
+	if err := os.Setenv("BAIZE_ROS2_SUBSCRIBER_FD", strconv.Itoa(int(file.Fd()))); err != nil {
+		ros2SubscriberMemfd = nil
+		return "", fmt.Errorf("configure ROS2 subscriber descriptor: %w", err)
 	}
-	if err := temporary.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(temporaryPath, destination); err != nil {
-		return "", err
-	}
-	return destination, nil
+	closeOnError = false
+	return "/proc/self/fd/3", nil
 }
 
 func parseInstallOptions(arguments []string) (installOptions, error) {
@@ -220,8 +199,10 @@ func install(options installOptions, executablePath string) error {
 	if err := writeFileAtomic(installedRuntime, content, 0o755, userID, groupID); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(installedROS2Subscriber, embeddedROS2Subscriber, 0o755, 0, 0); err != nil {
-		return fmt.Errorf("install ROS2 subscriber: %w", err)
+	// Older installations materialized the ROS2 helper as a second binary.
+	// Remove that exact legacy path now that the helper is kept in memory.
+	if err := os.Remove(filepath.Join(installDir, "baize-ros2-subscriber")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove old ROS2 subscriber: %w", err)
 	}
 	if plan.replace {
 		if err := writeFileAtomic(installedConfig, plan.content, 0o640, 0, groupID); err != nil {

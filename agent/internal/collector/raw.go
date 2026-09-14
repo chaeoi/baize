@@ -7,7 +7,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +27,18 @@ func StreamRawTopic(ctx context.Context, setup []string, environment map[string]
 		return err
 	}
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-lc", command)
+	if descriptor := os.Getenv("BAIZE_ROS2_SUBSCRIBER_FD"); descriptor != "" {
+		fd, parseErr := strconv.Atoi(descriptor)
+		if parseErr != nil || fd < 0 {
+			return fmt.Errorf("invalid ROS2 subscriber descriptor: %q", descriptor)
+		}
+		file, openErr := os.Open(fmt.Sprintf("/proc/self/fd/%d", fd))
+		if openErr != nil {
+			return fmt.Errorf("open ROS2 subscriber descriptor: %w", openErr)
+		}
+		defer file.Close()
+		cmd.ExtraFiles = []*os.File{file}
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err

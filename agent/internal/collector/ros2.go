@@ -12,15 +12,13 @@ import (
 var rosEnvironmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
 var rosUserNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
-const defaultROS2SubscriberBinary = "/opt/baize/agent/baize-ros2-subscriber"
-
 func rosSubscriberCommand(setup []string, environment map[string]string, user, topic, messageType string, readTimeout time.Duration) (string, error) {
 	if topic == "" || messageType == "" {
 		return "", fmt.Errorf("ROS2 subscriber topic and message type are required")
 	}
 	binary := os.Getenv("BAIZE_ROS2_SUBSCRIBER")
 	if binary == "" {
-		binary = defaultROS2SubscriberBinary
+		return "", fmt.Errorf("ROS2 subscriber is not prepared")
 	}
 	arguments := shellQuote(binary) +
 		" --topic " + shellQuote(topic) + " --message-type " + shellQuote(messageType) +
