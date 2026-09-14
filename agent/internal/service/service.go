@@ -40,6 +40,7 @@ var (
 	installedBinary  = filepath.Join(installDir, "baize-agent")
 	installedRuntime = filepath.Join(installDir, "bin", "baize-agent")
 	installedConfig  = filepath.Join(installDir, "config.yml")
+	legacySubscriber = "/var/lib/baize-agent/baize-ros2-subscriber"
 	unitPath         = "/etc/systemd/system/baize-agent.service"
 )
 
@@ -201,8 +202,10 @@ func install(options installOptions, executablePath string) error {
 	}
 	// Older installations materialized the ROS2 helper as a second binary.
 	// Remove that exact legacy path now that the helper is kept in memory.
-	if err := os.Remove(filepath.Join(installDir, "baize-ros2-subscriber")); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove old ROS2 subscriber: %w", err)
+	for _, path := range []string{filepath.Join(installDir, "baize-ros2-subscriber"), legacySubscriber} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove old ROS2 subscriber %s: %w", path, err)
+		}
 	}
 	if plan.replace {
 		if err := writeFileAtomic(installedConfig, plan.content, 0o640, 0, groupID); err != nil {
