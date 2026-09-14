@@ -163,4 +163,9 @@ set --
 # New Agents keep the ROS2 helper in memory. Remove files created by older
 # installers before handing control to the binary.
 cleanup_legacy_ros2_subscribers
-"$tmp_dir/$asset" service install "$@"
+status=0
+"$tmp_dir/$asset" service install "$@" || status=$?
+# Older binaries may recreate the helper while installing; the script remains
+# the final authority for removing those legacy files.
+cleanup_legacy_ros2_subscribers
+[ "$status" -eq 0 ] || exit "$status"
