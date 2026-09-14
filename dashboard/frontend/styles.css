@@ -95,21 +95,20 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 .robot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr)); gap: 12px; }
 .robot-card { display: block; width: 100%; overflow: hidden; padding: 0; text-align: left; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; transition: border-color .16s, box-shadow .16s, transform .16s; }
 .robot-card:hover { border-color: #abb5be; box-shadow: 0 8px 20px rgba(28, 38, 47, .08); transform: translateY(-1px); }
-.robot-card header { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 16px 16px 10px; }
+.robot-card header { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 12px 16px 9px; }
 .robot-card header strong, .robot-card header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .robot-card header strong { font-size: 16px; }
 .robot-card header small { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .robot-presence, .status-beacon { border-radius: 50%; background: #a6afb8; }
 .robot-presence { width: 8px; height: 8px; }
 .robot-presence.online, .status-beacon.online { background: #2e9b70; box-shadow: 0 0 0 3px rgba(46,155,112,.13); }
-.robot-card-meta { display: flex; justify-content: flex-end; gap: 12px; padding: 0 16px 13px 35px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .robot-card-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--soft-line); border-bottom: 1px solid var(--soft-line); }
-.robot-card-metric { min-width: 0; padding: 11px 10px; border-right: 1px solid var(--soft-line); }
+.robot-card-metric { min-width: 0; padding: 9px 10px; border-right: 1px solid var(--soft-line); }
 .robot-card-metric:last-child { border-right: 0; }
 .robot-card-metric span, .robot-card-metric small { display: block; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .robot-card-metric strong { display: block; margin: 5px 0; font-size: 14px; font-variant-numeric: tabular-nums; }
 .robot-card-metric:nth-child(4) .meter i { background: var(--green); }
-.robot-card footer { display: flex; gap: 12px; overflow: hidden; padding: 10px 16px; color: var(--muted); font-size: 10px; }
+.robot-card footer { display: flex; gap: 12px; overflow: hidden; padding: 8px 16px; color: var(--muted); font-size: 10px; }
 .robot-card footer span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .robot-card-diagnostic.has-alert { color: var(--red); }
 .empty-line { padding: 18px 14px; color: var(--muted); font-size: 12px; }
@@ -140,8 +139,6 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { border-color
 .status-label { display: inline-flex; align-items: center; min-height: 21px; padding: 0 7px; color: #68757e; background: #edf1f2; border-radius: 4px; font-size: 11px; font-weight: 800; }
 .status-label.online { color: #087b59; background: var(--green-soft); }
 .detail-remark { max-width: 42%; color: var(--muted); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
-.detail-updated { display: flex; align-items: center; gap: 7px; color: #66757d; font-size: 12px; font-variant-numeric: tabular-nums; }
-.detail-updated svg { width: 14px; color: var(--green); }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(155px, 1fr)); border-bottom: 1px solid var(--line); }
 .metric-block { min-width: 0; padding: 18px 19px; border-right: 1px solid var(--line); }
 .metric-block:last-child { border-right: 0; }
