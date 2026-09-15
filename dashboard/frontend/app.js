@@ -406,7 +406,7 @@ function renderRobotList() {
     const batteryOnline = online && battery?.online && battery?.present !== false;
     const metric = (label, value, sub, level) => `<div class="robot-card-metric"><span>${label}</span><strong>${value}</strong><div class="meter"><i class="${meterClass(level)}"></i></div><small>${sub}</small></div>`;
     return `<a class="robot-card ${online ? 'online' : 'offline'}" data-key="${escapeHTML(robot.id)}" href="${escapeHTML(publicRouteURL(robot.id, defaultPublicHistoryRoute()))}">
-      <header><span class="robot-presence ${online ? 'online' : ''}"></span><div><strong>${escapeHTML(robot.code)}</strong>${remark ? `<small>${escapeHTML(remark)}</small>` : ''}</div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
+      <header><span class="robot-presence ${online ? 'online' : ''}"></span><div class="robot-card-identity"><strong>${escapeHTML(robot.code)}</strong>${remark ? `<small class="robot-card-remark">${escapeHTML(remark)}</small>` : ''}</div><span class="status-label ${online ? 'online' : ''}">${online ? '在线' : '离线'}</span></header>
       <div class="robot-card-metrics">
         ${metric('CPU', online && summary.has_telemetry ? `${fixed(summary.cpu_percent)}%` : '--', online && summary.has_telemetry ? `负载 ${fixed(summary.load_1)}` : '暂无数据', online && summary.has_telemetry ? summary.cpu_percent : NaN)}
         ${metric('内存', online && summary.has_telemetry ? `${fixed(summary.memory_percent)}%` : '--', online && summary.has_telemetry ? '系统内存' : '暂无数据', online && summary.has_telemetry ? summary.memory_percent : NaN)}
