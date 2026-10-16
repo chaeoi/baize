@@ -5,8 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
-Group=ubuntu
 WorkingDirectory=/opt/baize/agent
 ExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml
 Restart=always
@@ -16,17 +14,6 @@ LogsDirectory=baize-agent
 LogsDirectoryMode=0750
 StateDirectory=baize-agent
 StateDirectoryMode=0750
-
-NoNewPrivileges=true
-
-ProtectSystem=strict
-ProtectHome=read-only
-ReadOnlyPaths=/opt/baize/agent
-ReadWritePaths=/opt/baize/agent/bin
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectControlGroups=true
-RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

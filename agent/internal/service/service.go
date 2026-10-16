@@ -23,10 +23,12 @@ import (
 )
 
 const (
-	serviceName   = "baize-agent"
-	serviceUser   = "ubuntu"
-	logDir        = "/var/log/baize-agent"
-	privateLogDir = "/var/log/private/baize-agent"
+	serviceName     = "baize-agent"
+	serviceUser     = "ubuntu"
+	stateDir        = "/var/lib/baize-agent"
+	privateStateDir = "/var/lib/private/baize-agent"
+	logDir          = "/var/log/baize-agent"
+	privateLogDir   = "/var/log/private/baize-agent"
 )
 
 // The release workflow replaces this development stub with the C++ binary for
@@ -36,12 +38,15 @@ const (
 var embeddedROS2Subscriber []byte
 
 var (
-	installDir       = "/opt/baize/agent"
-	installedBinary  = filepath.Join(installDir, "baize-agent")
-	installedRuntime = filepath.Join(installDir, "bin", "baize-agent")
-	installedConfig  = filepath.Join(installDir, "config.yml")
-	unitPath         = "/etc/systemd/system/baize-agent.service"
+	installDir      = "/opt/baize/agent"
+	installedBinary = filepath.Join(installDir, "baize-agent")
+	installedConfig = filepath.Join(installDir, "config.yml")
+	unitPath        = "/etc/systemd/system/baize-agent.service"
 )
+
+// BinaryPath is the installed Agent. The launcher execs it and self-updates
+// replace this single file in place.
+func BinaryPath() string { return installedBinary }
 
 var ros2SubscriberMemfd *os.File
 
@@ -149,65 +154,39 @@ func install(options installOptions, executablePath string) error {
 	if err := requireRoot(); err != nil {
 		return err
 	}
-	serviceAccount, err := user.Lookup(serviceUser)
-	if err != nil {
-		return fmt.Errorf("lookup service user %q: %w", serviceUser, err)
-	}
-	groupID, err := strconv.Atoi(serviceAccount.Gid)
-	if err != nil {
-		return fmt.Errorf("parse service group id: %w", err)
-	}
-	userID, err := strconv.Atoi(serviceAccount.Uid)
-	if err != nil {
-		return fmt.Errorf("parse service user id: %w", err)
-	}
 	plan, err := planConfig(options)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(installDir, 0o750); err != nil {
-		return err
-	}
-	// The service runs as the ubuntu account. Ensure the parent is traversable
-	// on fresh systems where /opt/baize was created by root with mode 0750.
-	parentDir := filepath.Dir(installDir)
-	if err := os.Chown(parentDir, 0, groupID); err != nil {
-		return err
-	}
-	if err := os.Chmod(parentDir, 0o750); err != nil {
-		return err
-	}
-	if err := os.Chown(installDir, 0, groupID); err != nil {
-		return err
-	}
-	if err := os.Chmod(installDir, 0o750); err != nil {
-		return err
+	for _, dir := range []string{filepath.Dir(installDir), installDir} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return err
+		}
+		if err := os.Chown(dir, 0, 0); err != nil {
+			return err
+		}
+		if err := os.Chmod(dir, 0o750); err != nil {
+			return err
+		}
 	}
 	if err := installBinary(executablePath); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(installedRuntime), 0o750); err != nil {
-		return err
-	}
-	if err := os.Chown(filepath.Dir(installedRuntime), userID, groupID); err != nil {
-		return err
-	}
-	content, err := os.ReadFile(installedBinary)
-	if err != nil {
-		return err
-	}
-	if err := writeFileAtomic(installedRuntime, content, 0o755, userID, groupID); err != nil {
-		return err
+	// Earlier releases kept a second, writable copy under bin/ for an
+	// unprivileged service. The service now runs as root over the single
+	// binary, so drop the stale tree left behind by an in-place upgrade.
+	if err := os.RemoveAll(filepath.Join(installDir, "bin")); err != nil {
+		return fmt.Errorf("remove legacy runtime directory: %w", err)
 	}
 	if plan.replace {
-		if err := writeFileAtomic(installedConfig, plan.content, 0o640, 0, groupID); err != nil {
+		if err := writeFileAtomic(installedConfig, plan.content, 0o600, 0, 0); err != nil {
 			return err
 		}
 	} else {
-		if err := os.Chown(installedConfig, 0, groupID); err != nil {
+		if err := os.Chown(installedConfig, 0, 0); err != nil {
 			return fmt.Errorf("set config ownership: %w", err)
 		}
-		if err := os.Chmod(installedConfig, 0o640); err != nil {
+		if err := os.Chmod(installedConfig, 0o600); err != nil {
 			return fmt.Errorf("set config permissions: %w", err)
 		}
 	}
@@ -245,13 +224,31 @@ func uninstall() error {
 		return err
 	}
 	_ = runCommand("systemctl", "reset-failed", serviceName+".service")
-	for _, path := range []string{logDir, privateLogDir} {
+	for _, path := range uninstallPaths() {
 		if err := os.RemoveAll(path); err != nil {
-			return fmt.Errorf("remove logs %s: %w", path, err)
+			return fmt.Errorf("remove %s: %w", path, err)
 		}
 	}
-	fmt.Printf("uninstalled %s.service; preserved %s and removed logs\n", serviceName, installDir)
+	// The install directory parent only ever held this Agent; drop it when empty.
+	_ = os.Remove(filepath.Dir(installDir))
+	fmt.Printf("uninstalled %s.service and removed its binaries, configuration, state and logs\n", serviceName)
 	return nil
+}
+
+// uninstallPaths lists every location the Agent creates: the install tree
+// (binary, configuration and self-update artifacts), the systemd state and log
+// directories with their private variants, and the cache used by direct,
+// non-systemd runs.
+func uninstallPaths() []string {
+	paths := []string{installDir, stateDir, privateStateDir, logDir, privateLogDir}
+	// The Agent now runs as root, so also clear the cache left by the account
+	// earlier installs ran as.
+	for _, account := range []string{"root", serviceUser} {
+		if entry, err := user.Lookup(account); err == nil && entry.HomeDir != "" {
+			paths = append(paths, filepath.Join(entry.HomeDir, ".cache", "baize-agent"))
+		}
+	}
+	return paths
 }
 
 type configPlan struct {
@@ -544,14 +541,14 @@ func containsControl(value string) bool {
 }
 
 func serviceUnit() string {
-	return "[Unit]\nDescription=Baize robot monitoring agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=ubuntu\nGroup=ubuntu\nWorkingDirectory=/opt/baize/agent\nExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml\nRestart=always\nRestartSec=3\nEnvironment=ROS_LOG_DIR=/var/log/baize-agent/ros\nLogsDirectory=baize-agent\nLogsDirectoryMode=0750\nStateDirectory=baize-agent\nStateDirectoryMode=0750\nNoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nReadOnlyPaths=/opt/baize/agent\nReadWritePaths=/opt/baize/agent/bin\nPrivateTmp=true\nProtectKernelTunables=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\n\n[Install]\nWantedBy=multi-user.target\n"
+	return "[Unit]\nDescription=Baize robot monitoring agent\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nWorkingDirectory=/opt/baize/agent\nExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml\nRestart=always\nRestartSec=3\nEnvironment=ROS_LOG_DIR=/var/log/baize-agent/ros\nLogsDirectory=baize-agent\nLogsDirectoryMode=0750\nStateDirectory=baize-agent\nStateDirectoryMode=0750\n\n[Install]\nWantedBy=multi-user.target\n"
 }
 
 const serviceUsage = `Usage: baize-agent service <command>
 
 Commands:
   install    install or update the systemd service
-  uninstall  stop, remove, and disable the systemd service
+  uninstall  stop and remove the service, binaries, config, state and logs
   status     show systemd status
 `
 

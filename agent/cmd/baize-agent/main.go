@@ -72,7 +72,7 @@ func main() {
 	if supervise {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		if err := agent.Supervise(ctx, "/opt/baize/agent/bin/baize-agent", *configPath); err != nil && !errors.Is(err, context.Canceled) {
+		if err := agent.Supervise(ctx, service.BinaryPath(), *configPath); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("Agent supervisor stopped", "error", err)
 			os.Exit(1)
 		}

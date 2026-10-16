@@ -125,8 +125,8 @@ Agent 序号按块持久化预留，不依赖系统时间，重启跳过未使�
 
 GitHub Actions 构建 Linux AMD64/ARM64 静态 Agent；机器人只下载经 SHA-256 校验
 的 Release 二进制。Agent 自带服务安装器，`service install` 会把当前二进制安装到
-`/opt/baize/agent/baize-agent`，创建 systemd 单元，并生成由 root 所有、仅 Agent
-服务账户可读的 `/opt/baize/agent/config.yml`。topic、电机清单、电池 ROS2 消息格式
+`/opt/baize/agent/baize-agent`，创建以 root 运行的 systemd 单元，并生成仅 root 可读的
+`/opt/baize/agent/config.yml`。topic、电机清单、电池 ROS2 消息格式
 均由二进制内置 profile 决定，配置文件不能覆盖。
 
 现场配置用顶层 `model` 选择一个型号，型号文件不会复制到机器人：
@@ -176,8 +176,8 @@ curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/ma
 GitHub Release（默认经 GitWarp 加速），并在校验通过后自动升级，不依赖 Dashboard 在线或参与发布。
 未传 `--uuid` 时 Agent 生成永久 UUID；也支持 `--force-config`。安装参数只用于写入 `config.yml`，不会成为第二个
 运行时配置来源；已有有效配置默认保留，传入某个参数时只更新对应字段。`--force-config`
-用于从默认模板重新生成配置。可用以下命令查看状态或卸载服务；卸载保留二进制和配置，
-方便重新注册：
+用于从默认模板重新生成配置。可用以下命令查看状态或卸载服务；卸载会删除二进制、配置、
+本地缓存与日志，并注销服务，再次安装将生成新的 UUID：
 
 ```bash
 sudo /opt/baize/agent/baize-agent service install --uuid 7fd34256-bf3a-4cf6-8da0-fbce40f34d11
