@@ -85,6 +85,10 @@ function bindEvents() {
   $('#remark-form').addEventListener('submit', saveRemark);
   $('#delete-robot-button').addEventListener('click', openDeleteRobot);
   $('#delete-robot-form').addEventListener('submit', deleteRobot);
+  $('#open-install-button').addEventListener('click', openInstallDialog);
+  $('#install-form').addEventListener('submit', copyInstallCommand);
+  $('#install-model-select').addEventListener('change', updateInstallCommandPreview);
+  $('#install-robot-code').addEventListener('input', updateInstallCommandPreview);
   $('#public-history-range').addEventListener('change', (event) => {
     const range = event.target.value;
     if (!publicHistoryRangeOptions(state.publicHistoryMode).includes(range) || range === state.publicHistoryRange) return;
@@ -919,8 +923,9 @@ function renderSettings() {
   $('#settings-robot-status').classList.toggle('online', online);
   $('#settings-robot-last-seen').textContent = online ? '' : `最后上报 ${formatDate(robot.last_seen)}`;
   $('#settings-robot-remark').textContent = robot.remark?.trim() || '未设置备注';
+  const bmsVersion = robot.telemetry?.bms?.version;
   $('#settings-identity-facts').innerHTML = facts([
-    ['UUID', robot.uuid], ['型号', robot.model], ['主机名', robot.hostname], ['平台', `${robot.os}/${robot.arch}`], ['Agent 版本', robot.agent_version], ['最后上报', formatDate(robot.last_seen)]
+    ['UUID', robot.uuid], ['型号', robot.model], ['主机名', robot.hostname], ['平台', `${robot.os}/${robot.arch}`], ['Agent 版本', robot.agent_version], ['batcan 版本', bmsVersion || '-'], ['最后上报', formatDate(robot.last_seen)]
   ]);
   $('#settings-session').textContent = state.adminUser;
 }
@@ -963,6 +968,74 @@ async function deleteRobot(event) {
     render();
     toast('设备及其历史已删除');
   } catch (error) { toast(error.message, true); }
+}
+
+let cachedAgentToken = '';
+let cachedSupportedModels = [];
+
+async function openInstallDialog() {
+  const dialog = $('#install-dialog');
+  if (!dialog) return;
+  const currentRobot = selectedAdminRobot();
+  $('#install-robot-code').value = currentRobot ? currentRobot.code : 'M99';
+  try {
+    const data = await api('/api/v1/admin/agent-token', {}, true);
+    cachedAgentToken = data.agent_token || '';
+    cachedSupportedModels = Array.isArray(data.models) && data.models.length ? data.models : ['2m_v0.1.2'];
+  } catch (error) {
+    toast(`获取安装配置失败：${error.message}`, true);
+    return;
+  }
+  const select = $('#install-model-select');
+  select.innerHTML = cachedSupportedModels.map((m) => `<option value="${escapeHTML(m)}">${escapeHTML(m)}</option>`).join('');
+  if (currentRobot?.model && cachedSupportedModels.includes(currentRobot.model)) {
+    select.value = currentRobot.model;
+  } else {
+    select.value = cachedSupportedModels[0] || '2m_v0.1.2';
+  }
+  updateInstallCommandPreview();
+  renderIcons();
+  dialog.showModal();
+}
+
+const AGENT_INSTALL_SCRIPT = 'https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/main/agent/deploy/install.sh';
+
+function buildInstallCommand() {
+  const model = $('#install-model-select')?.value?.trim() || '2m_v0.1.2';
+  const code = $('#install-robot-code')?.value?.trim() || 'M99';
+  const token = cachedAgentToken || '<agent-token>';
+  const args = [
+    `--dashboard-url ${window.location.origin}`,
+    `--token '${token}'`,
+    `--robot-code '${code}'`,
+    `--robot-model ${model}`,
+  ];
+  return `curl -fsSL ${AGENT_INSTALL_SCRIPT} | \\\n  sudo sh -s -- \\\n  ${args.join(' \\\n  ')}`;
+}
+
+function updateInstallCommandPreview() {
+  const preview = $('#install-command-preview');
+  if (preview) {
+    preview.value = buildInstallCommand();
+  }
+}
+
+async function copyInstallCommand(event) {
+  event.preventDefault();
+  const command = buildInstallCommand();
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(command);
+    } else {
+      const textarea = $('#install-command-preview');
+      textarea.select();
+      document.execCommand('copy');
+    }
+    $('#install-dialog').close();
+    toast('已复制一键安装命令');
+  } catch (error) {
+    toast(`复制失败，请手动选择复制：${error.message}`, true);
+  }
 }
 
 function drawPublicHistory(points) {

@@ -44,6 +44,9 @@ curl --cookie 'baize_session=<session-cookie>' \
   http://<dashboard-host>:8080/api/v1/admin/agent-token
 ```
 
+管理后台“设备管理”页顶部的“安装 Agent”按钮会读取同一个 token，按所选型号与设备编号
+生成一键安装命令并写入剪贴板。
+
 修改 `dashboard.listen` 即可改变监听端口。例如 Cloudflare Tunnel 的本地 service
 为 `http://127.0.0.1:5037` 时，配置 `listen: "127.0.0.1:5037"`。JWT 密钥始终保存在
 control DB；Agent token 始终来自 YAML。Agent 使用错误密钥时，Dashboard 会将来源 IP、

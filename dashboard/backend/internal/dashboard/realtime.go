@@ -94,6 +94,7 @@ type PublicBattery struct {
 	Temperature       float64 `json:"temperature"`
 	PowerWatts        float64 `json:"power_watts"`
 	PowerSupplyStatus string  `json:"power_supply_status,omitempty"`
+	Version           string  `json:"version,omitempty"`
 }
 
 type robotStreamEvent struct {
@@ -231,7 +232,7 @@ func (s *Server) publicRobotWithSamples(record RobotRecord, includeSamples bool)
 		summary.Battery = &PublicBattery{
 			Online: bms.Online, Present: bms.Present, SOCPercent: bms.SOCPercent, Voltage: bms.Voltage,
 			Current: bms.Current, Temperature: bms.Temperature, PowerWatts: bms.PowerWatts,
-			PowerSupplyStatus: bms.PowerSupplyStatus,
+			PowerSupplyStatus: bms.PowerSupplyStatus, Version: bms.Version,
 		}
 	}
 	if telemetry.Motors != nil {

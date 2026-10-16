@@ -27,6 +27,7 @@ import (
 	"unicode"
 
 	"baize/shared/rawstream"
+	"baize/shared/robotmodel"
 )
 
 const (
@@ -228,7 +229,14 @@ func (s *Server) agentToken(writer http.ResponseWriter, request *http.Request) {
 		methodNotAllowed(writer)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"agent_token": s.config.AgentToken})
+	models, err := robotmodel.Names()
+	if err != nil {
+		models = nil
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"agent_token": s.config.AgentToken,
+		"models":      models,
+	})
 }
 
 func (s *Server) startSession(writer http.ResponseWriter, request *http.Request) error {
