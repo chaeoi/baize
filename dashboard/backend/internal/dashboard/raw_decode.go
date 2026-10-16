@@ -392,6 +392,7 @@ func decodeDiagnosticArrayCDR(payload []byte, topic string, at time.Time) (*mode
 		if strings.HasSuffix(status.name, "/summary") {
 			metrics.Present = status.message == "BMS data received"
 			metrics.Profile = values["profile"]
+			metrics.Version = values["version"]
 			rawReadMetric(values, "voltage", &metrics.Voltage)
 			rawReadMetric(values, "current", &metrics.Current)
 			rawReadMetric(values, "temperature", &metrics.Temperature)

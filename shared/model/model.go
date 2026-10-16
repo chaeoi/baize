@@ -82,6 +82,7 @@ type BMSMetrics struct {
 	PowerSupplyStatus string             `json:"power_supply_status"`
 	LastFrameAt       time.Time          `json:"last_frame_at,omitempty"`
 	PowerWatts        float64            `json:"power_watts,omitempty"`
+	Version           string             `json:"version,omitempty"`
 	CellVoltages      []float64          `json:"cell_voltages,omitempty"`
 	CellTemperatures  []float64          `json:"cell_temperatures,omitempty"`
 	Metrics           map[string]float64 `json:"metrics,omitempty"`

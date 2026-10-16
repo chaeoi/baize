@@ -24,6 +24,10 @@ const jointCDR = "AAEAAADxU2UVzVsHBQAAAGJhc2UAAAAAAgAAAAwAAABtb3Rvcl9pZF8wMQAMAA
 const batteryCDR = "AAEAAADxU2UVzVsHBQAAAGJhc2UAAAAAAQAAAAEAAAATAAAAYmF0Y2FuL2piZC9zdW1tYXJ5AAASAAAAQk1TIGRhdGEgcmVjZWl2ZWQAAAAFAAAAYm1zMQDXoIYEAAAACAAAAHZvbHRhZ2UABQAAADM4LjIAAAAACwAAAHBlcmNlbnRhZ2UAAAQAAAAwLjUACAAAAGN1cnJlbnQAAwAAAC0yAIYUAAAAcG93ZXJfc3VwcGx5X3N0YXR1cwACAAAAMgA="
 const rawTestUUID = "52446a60-7483-4ba7-b8c7-b85f60b2a00f"
 
+// A real firmware frame reports its own version as a summary KeyValue; this
+// fixture mirrors batteryCDR with a trailing `version` key added.
+const batteryVersionCDR = "AAEAAADxU2UVzVsHBQAAAGJhc2UAAAAAAQAAAAAAAAATAAAAYmF0Y2FuL2piZC9zdW1tYXJ5AAASAAAAQk1TIGRhdGEgcmVjZWl2ZWQAAAAFAAAAYm1zMQAAAAAFAAAACAAAAHZvbHRhZ2UABQAAADM4LjIAAAAACwAAAHBlcmNlbnRhZ2UAAAQAAAAwLjUACAAAAGN1cnJlbnQAAwAAAC0yAAAUAAAAcG93ZXJfc3VwcGx5X3N0YXR1cwACAAAAMgAAAAgAAAB2ZXJzaW9uABAAAABiYXRjYW4gMjAyNjEwMTMA"
+
 func fixtureCDR(t *testing.T, encoded string) []byte {
 	t.Helper()
 	data, err := base64.StdEncoding.DecodeString(encoded)
@@ -66,6 +70,25 @@ func TestDecodeROSHumbleCDR(t *testing.T) {
 				t.Fatalf("accepted truncated battery at %d", length)
 			}
 		}
+	}
+}
+
+func TestDecodeBatteryReportsBatcanVersion(t *testing.T) {
+	at := time.Unix(1700000000, 123456789).UTC()
+	battery, err := decodeDiagnosticArrayCDR(fixtureCDR(t, batteryVersionCDR), "/batcan/data", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if battery.Version != "batcan 20261013" {
+		t.Fatalf("wrong batcan version: %q", battery.Version)
+	}
+	if battery.Voltage != 38.2 || battery.SOCPercent != 50 || !battery.Present {
+		t.Fatalf("version frame lost scalar fields: %+v", battery)
+	}
+	// Frames without the key must leave the field empty rather than fail.
+	plain, err := decodeDiagnosticArrayCDR(fixtureCDR(t, batteryCDR), "/batcan/data", at)
+	if err != nil || plain.Version != "" {
+		t.Fatalf("plain frame version = %q, err=%v", plain.Version, err)
 	}
 }
 
