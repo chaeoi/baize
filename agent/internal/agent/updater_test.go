@@ -54,16 +54,23 @@ func main(){for i,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("2026.1
 		name         string
 		invalid      bool
 		handoffError bool
+		installed    string
 	}{
 		{name: "version-mismatch", invalid: true},
 		{name: "checksum-mismatch", invalid: true},
 		{name: "config-rejected", invalid: true},
 		{name: "handoff-failed", handoffError: true},
+		{name: "already-installed", installed: "2026.11.2"},
+		{name: "newer-installed-after-check", installed: "2026.11.3"},
 		{name: "success"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "agent")
-			old := []byte("working executable")
+			installed := test.installed
+			if installed == "" {
+				installed = "2026.11.1"
+			}
+			old := []byte("#!/bin/sh\nprintf '%s\\n' '" + installed + "'\n")
 			if err := os.WriteFile(path, old, 0755); err != nil {
 				t.Fatal(err)
 			}
@@ -94,11 +101,15 @@ func main(){for i,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("2026.1
 				}
 				return nil
 			})
-			wantFailure := test.invalid || test.handoffError
+			obsolete := test.installed != ""
+			wantFailure := test.invalid || test.handoffError || obsolete
 			if (err != nil) != wantFailure {
 				t.Fatalf("unexpected update result: %v", err)
 			}
-			if drained == test.invalid {
+			if errors.Is(err, ErrUpdateSuperseded) != obsolete {
+				t.Fatalf("wrong superseded decision: %v", err)
+			}
+			if drained == (test.invalid || obsolete) {
 				t.Fatalf("wrong drain decision: %v", drained)
 			}
 			expected := binary

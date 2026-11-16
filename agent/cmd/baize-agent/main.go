@@ -296,7 +296,9 @@ func updateLoop(ctx context.Context, cfg config.Config, configPath string, httpC
 			}
 		})
 		handoff.finished <- err
-		if err != nil {
+		if errors.Is(err, agent.ErrUpdateSuperseded) {
+			slog.Info("skip superseded Agent update", "reason", err)
+		} else if err != nil {
 			slog.Error("apply update", "error", err)
 		} else {
 			slog.Info("Agent updated; restarting service", "version", update.Version)

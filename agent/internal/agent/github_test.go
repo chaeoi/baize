@@ -11,6 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/iotest"
+
+	"baize/shared/model"
 )
 
 type releaseTransport func(*http.Request) (*http.Response, error)
@@ -142,6 +145,55 @@ func TestLatestReleaseRejectsInvalidRedirect(t *testing.T) {
 			})})
 			if _, err := client.Check(t.Context(), "2026.11.1", runtime.GOOS, runtime.GOARCH); err == nil {
 				t.Fatal("invalid release accepted")
+			}
+		})
+	}
+}
+
+func TestReleaseBinaryFallbackDoesNotMixSources(t *testing.T) {
+	asset := "baize-agent-linux-" + runtime.GOARCH
+	payload := []byte("complete release executable")
+	hash := sha256.Sum256(payload)
+	update := model.UpdateInfo{
+		Version: "2026.11.2", OS: "linux", Arch: runtime.GOARCH,
+		SHA256: hex.EncodeToString(hash[:]),
+		URL:    "https://mirror.example/github.com/chaeoi/baize/releases/download/2026.11.2/" + asset,
+	}
+	for _, failure := range []string{"http-error", "partial-body", "wrong-checksum", "both-unavailable"} {
+		t.Run(failure, func(t *testing.T) {
+			t.Setenv("BAIZE_MIRROR", "https://mirror.example")
+			var hosts []string
+			client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+				hosts = append(hosts, r.URL.Host)
+				status := http.StatusOK
+				var body io.Reader = bytes.NewReader(payload)
+				if r.URL.Host == "mirror.example" {
+					switch failure {
+					case "http-error", "both-unavailable":
+						status = http.StatusBadGateway
+					case "partial-body":
+						body = io.MultiReader(strings.NewReader("partial mirror response"), iotest.ErrReader(io.ErrUnexpectedEOF))
+					case "wrong-checksum":
+						body = strings.NewReader("corrupt mirror response")
+					}
+				} else if r.URL.String() != "https://github.com/chaeoi/baize/releases/download/2026.11.2/"+asset {
+					t.Fatalf("fallback changed the pinned asset: %s", r.URL)
+				} else if failure == "both-unavailable" {
+					status = http.StatusServiceUnavailable
+				}
+				return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: make(http.Header), Body: io.NopCloser(body), Request: r}, nil
+			})})
+			var output bytes.Buffer
+			err := client.Download(t.Context(), update, &output)
+			if strings.Join(hosts, ",") != "mirror.example,github.com" {
+				t.Fatalf("fallback was not attempted: %v", hosts)
+			}
+			if failure == "both-unavailable" {
+				if err == nil || output.Len() != 0 {
+					t.Fatalf("failed sources wrote a candidate: %q, %v", output.Bytes(), err)
+				}
+			} else if err != nil || !bytes.Equal(output.Bytes(), payload) {
+				t.Fatalf("sources were mixed or fallback failed: %q, %v", output.Bytes(), err)
 			}
 		})
 	}

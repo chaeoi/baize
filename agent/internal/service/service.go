@@ -556,6 +556,10 @@ func updateService() error {
 	if stopped {
 		err = errors.Join(err, runCommand("systemctl", "start", serviceName+".service"))
 	}
+	if errors.Is(err, agent.ErrUpdateSuperseded) {
+		fmt.Println("baize-agent is up to date")
+		return nil
+	}
 	return err
 }
 

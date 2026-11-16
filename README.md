@@ -176,7 +176,8 @@ curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/ma
 GitHub 最新成功发布的 Release，启动约 5 秒后首次检查、默认每 24 小时。
 检查时只读取 GitHub 最新 Release 跳转地址中的版本标签，按年、月、序号比较。只有远端版本更高时，才从该版本的固定标签
 下载 `SHA256SUMS` 和二进制，校验 SHA-256、程序版本及当前配置后升级。相同或较低版本不下载程序。
-文件下载默认经 GitWarp 加速。
+文件下载默认经 GitWarp 加速；二进制下载失败、残缺或校验不符时回退 GitHub。
+手动和自动更新使用同一把锁，持锁后复核实际安装版本，避免过时的候选版本覆盖较新的程序。
 尚未构建成功并发布的源码提交不会安装到机器人上，更新不依赖 Dashboard 在线或参与发布。
 
 推送到 `main` 后自动编号、创建 tag，并发布同版本的 Agent 和 Dashboard 镜像，无需手动打标签。
