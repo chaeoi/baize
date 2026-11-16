@@ -29,7 +29,7 @@ func TestUpdateValidatesBeforeDrainingAndReplacesSingleBinary(t *testing.T) {
 	}
 	program := `package main
 import("fmt";"os")
-func main(){for i,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("20260905");return};if arg=="--config"{data,err:=os.ReadFile(os.Args[i+2]);if err!=nil||string(data)!="accept"{os.Exit(3)}}};return}
+func main(){for i,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("2026.11.2");return};if arg=="--config"{data,err:=os.ReadFile(os.Args[i+2]);if err!=nil||string(data)!="accept"{os.Exit(3)}}};return}
 `
 	if err := os.WriteFile(filepath.Join(source, "main.go"), []byte(program), 0600); err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func main(){for i,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("202609
 	defer server.Close()
 	client := testUpdateDownloader{client: server.Client(), url: server.URL}
 	hash := sha256.Sum256(binary)
-	update := model.UpdateInfo{Version: "20260905", OS: "linux", Arch: runtime.GOARCH, SHA256: hex.EncodeToString(hash[:])}
+	update := model.UpdateInfo{Version: "2026.11.2", OS: "linux", Arch: runtime.GOARCH, SHA256: hex.EncodeToString(hash[:])}
 	for _, test := range []struct {
 		name         string
 		invalid      bool
@@ -77,7 +77,7 @@ func main(){for i,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("202609
 			}
 			candidate := update
 			if test.name == "version-mismatch" {
-				candidate.Version = "20260906"
+				candidate.Version = "2026.11.3"
 			}
 			if test.name == "checksum-mismatch" {
 				candidate.SHA256 = "wrong"

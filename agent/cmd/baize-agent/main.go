@@ -268,8 +268,7 @@ func updateLoop(ctx context.Context, cfg config.Config, configPath string, httpC
 		slog.Error("find Agent executable for updates", "error", err)
 		return
 	}
-	// Keep comparing the running build even if the installed path is replaced.
-	client := agent.NewGitHubClient(httpClient, "/proc/self/exe")
+	client := agent.NewGitHubClient(httpClient)
 	check := func() {
 		checkCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
 		defer cancel()
