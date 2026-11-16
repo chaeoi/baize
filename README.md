@@ -21,8 +21,8 @@ SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌
 Dashboard 镜像自带配置样例。首次启动时会在数据卷中自动生成
 `/dashboard/data/config.yaml`（已有文件会直接复用），并在
 `/dashboard/data/control/control.db` 中保存 JWT 密钥。管理登录只需密码，首次使用初始密码 `123456`，登录后强制修改。
-新密码至少 12 个字符，UTF-8 编码不超过 72 字节。容器入口只在启动时调整数据卷权限，
-随后以 UID/GID `10001:10001` 运行 Dashboard；配置文件由该用户保存为 `0600`。
+新密码至少 12 个字符，UTF-8 编码不超过 72 字节。Dashboard 与哪吒相同，
+默认以容器内 root 运行，配置权限为 `0600`。前端资源嵌入 Dashboard 二进制。
 
 `dashboard.agent_token` 可直接填写 Agent 使用的 Bearer 密钥，至少 12 个字符；留空时
 Dashboard 会首次启动生成随机密钥并写回 `/dashboard/data/config.yaml`。Agent 密钥只有这一个
@@ -102,8 +102,8 @@ MCAP，不声明只允许 CDR 的 `ros2` profile，不能把该文件等同于 `
 
 Agent 的 `raw_batch_interval` 默认 `2s`，控制批量发送延迟，最小 `250ms`；批次还会
 按大小提前发送以限制内存。`raw_cache_bytes` 默认 `268435456`（256 MiB），按压缩后的
-文件字节数限制本地缓存，最小 1 MiB。缓存位于 systemd `StateDirectory` 下的
-`raw-outbox`，直接运行时位于用户缓存目录的 `baize-agent/<uuid>/raw-outbox`。
+文件字节数限制本地缓存，最小 1 MiB。缓存位于配置文件所在目录的
+`data/raw-outbox`，默认 `/opt/baize/agent/data/raw-outbox`。
 网络正常与断网使用同一队列，成功确认后删除对应批次；满时删除最旧批次，保留新数据。
 队列使用内存 FIFO 索引，运行期间无需反复扫描缓存目录，HTTP 等待不阻塞采集。
 
@@ -117,17 +117,17 @@ MCAP 正常封存后删除对应日志。异常退出后，下次启动自动将
 不增加浏览器内存或 Agent 网络流量。写盘失败会中断本次录制并在页面显示错误，
 实时曲线继续工作；修复磁盘问题后可重试录制，失败期间的数据不属于成功录制内容。
 Agent 序号按块持久化预留，不依赖系统时间，重启跳过未使用序号；自动更新先下载、
-校验候选版本，再停止采集并保存剩余批次后替换进程。
+校验候选程序及当前配置，再停止采集并保存剩余批次，原子替换当前二进制后退出，
+由 systemd 自动启动新程序。替换前的下载或验证失败不会中断采集。
 
 ## Agent
 
 GitHub Actions 构建 Linux AMD64/ARM64 静态 Agent；机器人只下载经 SHA-256 校验
-的 Release 二进制。Agent 自带服务安装器，`service install` 会把当前二进制安装到
-`/opt/baize/agent/baize-agent`，创建以专用系统用户 `baize-agent` 运行的 systemd 单元，
-不授予 Linux capabilities。`/opt/baize/agent/config.yml` 为 `root:baize-agent`、权限 `0640`，
-服务内只读。实际运行文件为 `bin/baize-agent`，只有 `bin/` 对服务用户可写，
-以支持原地更新；管理入口和配置所在目录由 root 持有。topic、电机清单、电池 ROS2 消息格式
-均由二进制内置 profile 决定，配置文件不能覆盖。
+的 Release 二进制。`service install` 将程序安装到 `/opt/baize/agent/baize-agent`，
+写入 `/opt/baize/agent/config.yml`，创建以 root 运行的 systemd 服务。
+安装目录为 `root:root`、权限 `0755`，配置为 `root:root`、权限 `0600`。
+服务直接运行这个二进制，安装、版本查询和自动更新使用同一个文件。
+topic、电机清单、电池 ROS2 消息格式均由二进制内置 profile 决定，配置文件不能覆盖。
 
 现场配置用顶层 `model` 选择一个型号，型号文件不会复制到机器人：
 
@@ -173,7 +173,7 @@ curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/ma
 
 下载脚本只负责选择架构、校验 Release，然后把安装参数传给
 `baize-agent service install`。安装后的 Agent 按 `update.check_interval` 定时直接检查
-GitHub 最新成功发布的 Release（默认经 GitWarp 加速），先读取 `SHA256SUMS`，
+GitHub 最新成功发布的 Release（默认经 GitWarp 加速，启动约 5 秒后首次检查、默认每 24 小时），先读取 `SHA256SUMS`，
 与正在运行的二进制比较，仅有变化时下载并校验候选程序，再自动升级。版本和发布标签为
 `日期-完整提交SHA`，同一天的提交可以分别追溯；不再移动同一个日期标签。
 尚未构建成功并发布的源码提交不会安装到机器人上，更新不依赖 Dashboard 在线或参与发布。
@@ -185,12 +185,14 @@ GitHub 最新成功发布的 Release（默认经 GitWarp 加速），先读取 `
 ```bash
 sudo /opt/baize/agent/baize-agent service install --uuid 7fd34256-bf3a-4cf6-8da0-fbce40f34d11
 sudo /opt/baize/agent/baize-agent service status
+sudo /opt/baize/agent/baize-agent service restart
+sudo /opt/baize/agent/baize-agent service update
 sudo /opt/baize/agent/baize-agent service uninstall
 ```
 
 支持的模型、ROS2 topic、关节标签与电机元数据均编入 Agent；不支持的型号会在
 安装校验阶段失败。Agent Release 内置按架构编译的 C++ `rclcpp` 订阅器，从匿名内存
-启动并长期监听 topic，安装目录另有自动生成的 `ros2-udp.xml`，不依赖 Python、`rclpy`
+启动并长期监听 topic，ROS2 UDP 配置同样由程序直接加载，不依赖 Python、`rclpy`
 或 `ros2 topic echo`：
 
 - 电机：`/motor/q2w_upper_motor_joint_state`，`sensor_msgs/msg/JointState`
@@ -199,17 +201,45 @@ sudo /opt/baize/agent/baize-agent service uninstall
 电池 topic 由独立 BMS 服务发布，仓库地址：
 `https://github.com/chaeoi/batcan`
 
-## 运行权限
+## 部署目录与服务管理
 
-安装、修改配置和卸载使用 sudo，长期运行的 Agent、Dashboard 和 batcan 均使用普通用户。
-Agent 安装时将专用用户加入本机已有的 `video`、`render` 组，以读取 GPU 指标。
-batcan 需要配置 CAN 接口和切换波特率，单独通过 systemd 获得 `CAP_NET_ADMIN`，
-不需要把整个 ROS2 节点设为 root。CAN 接口应为 BMS 专用接口，自动探测会调整其波特率。
+两个客户端都采用单二进制和配置的结构，以 root 运行；服务直接读取同一份配置，
+自动更新替换正在使用的二进制，随后退出，由 systemd 的 `Restart=always` 拉起。
+安装和服务管理命令支持 `install`、`uninstall`、`start`、`stop`、`restart`、`status`、`update`。
+更新协调锁位于 `/tmp`，程序与配置目录不保存第二份工作程序。
 
-两个服务安装器都会生成 Fast DDS UDP 配置并通过 `FASTRTPS_DEFAULT_PROFILES_FILE` 加载，
-避免与其他账户启动的 ROS2 节点共享内存时遇到权限冲突；topic、消息类型与采样率不变。
+```text
+服务端宿主机                    Dashboard 容器
+/opt/baize/dashboard/data/      /dashboard/
+├── config.yaml                ├── app          # 内嵌前端
+├── control/control.db         ├── config.yaml.example
+├── history/host/              └── data/        # 宿主机数据卷
+├── history/motor/              /entrypoint.sh
+└── recordings/
 
-自动更新只替换工作进程，管理入口、配置和 systemd 单元由安装器维护。
+机器人
+/opt/baize/agent/
+├── baize-agent
+├── config.yml
+└── data/
+    ├── raw-outbox/             # 待确认的原始批次与序号
+    └── ros/                    # ROS2 日志
+/opt/batcan/
+├── batcan
+├── config.yml
+└── data/ros/
+/etc/systemd/system/
+├── baize-agent.service
+└── batcan.service
+```
+
+Agent 与 batcan 在进程启动时直接加载内置 Fast DDS UDP 配置，只使用回环地址，
+避免与其他用户启动的 ROS2 节点共享内存时出现权限冲突。磁盘上没有额外 XML 配置文件。
+CAN 接口应为 BMS 专用接口，batcan 的自动探测会调整该接口的波特率。
+运行日志通过 `journalctl -u baize-agent`、`journalctl -u batcan` 查看，
+Dashboard 日志通过 `docker logs baize` 查看。
+
+Dashboard 使用镜像更新：拉取新镜像后按上面的 Docker 命令重新创建容器，复用同一数据卷。
 
 ## 本地联调
 

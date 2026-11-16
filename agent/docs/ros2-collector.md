@@ -18,8 +18,8 @@ The helper is compiled against ROS 2 Humble for each target architecture and
 is embedded in the Agent release. The robot needs the ROS runtime and the
 message packages, but does not need a C++ compiler or a source checkout. The
 Agent keeps the helper in an anonymous memory file during startup and passes it
-to each short-lived ROS process, so the installation contains the Agent launcher and worker, configuration and generated UDP
-transport profile, with no persistent helper file. If ROS is missing, the host/system
+to each short-lived ROS process, so installation requires one Agent binary and its configuration. The helper loads its loopback UDP profile directly from memory; neither the
+helper nor the transport profile is installed separately. Runtime caches and ROS logs are stored in data/ beside the config. If ROS is missing, the host/system
 collectors still run. Topic process failures are logged with bounded helper
 diagnostics and retried after one second. Dashboard marks the topics offline
 after the model's `read_timeout`, using receipt times rather than the ROS

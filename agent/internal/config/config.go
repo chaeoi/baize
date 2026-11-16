@@ -155,7 +155,7 @@ func Default() Config {
 		},
 		Update: UpdateConfig{
 			Enabled:       true,
-			CheckInterval: Duration(time.Minute),
+			CheckInterval: Duration(24 * time.Hour),
 		},
 	}
 }

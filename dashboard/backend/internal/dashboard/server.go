@@ -11,12 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"math"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
+	"path"
 	"regexp"
 	"runtime"
 	"sort"
@@ -27,6 +27,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"baize/dashboard/frontend"
 	"baize/shared/rawstream"
 	"baize/shared/robotmodel"
 )
@@ -48,7 +49,6 @@ type ServerConfig struct {
 	AgentToken   string
 	AdminUser    string
 	JWTSecret    string
-	FrontendDir  string
 	RecordingDir string
 	CookieSecure bool
 }
@@ -99,9 +99,7 @@ func NewServer(cfg ServerConfig, store *Store) *Server {
 	mux.HandleFunc("/api/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeError(writer, http.StatusNotFound, "API route not found")
 	})
-	if cfg.FrontendDir != "" {
-		mux.HandleFunc("/", server.frontend)
-	}
+	mux.HandleFunc("/", server.frontend)
 	server.handler = server.securityHeaders(mux)
 	return server
 }
@@ -111,15 +109,16 @@ func (s *Server) frontend(writer http.ResponseWriter, request *http.Request) {
 		methodNotAllowed(writer)
 		return
 	}
-	cleanPath := strings.TrimPrefix(filepath.Clean("/"+request.URL.Path), "/")
-	target := filepath.Join(s.config.FrontendDir, cleanPath)
-	if info, err := os.Stat(target); err == nil && !info.IsDir() {
-		writer.Header().Set("Cache-Control", "no-store")
-		http.ServeFile(writer, request, target)
-		return
+	name := strings.TrimPrefix(path.Clean("/"+request.URL.Path), "/")
+	if info, err := fs.Stat(frontend.Files, name); err != nil || info.IsDir() {
+		if path.Ext(name) != "" {
+			http.NotFound(writer, request)
+			return
+		}
+		name = "index.html"
 	}
 	writer.Header().Set("Cache-Control", "no-store")
-	http.ServeFile(writer, request, filepath.Join(s.config.FrontendDir, "index.html"))
+	http.ServeFileFS(writer, request, frontend.Files, name)
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {

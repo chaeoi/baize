@@ -26,6 +26,7 @@ const defaultMirror = "https://gitwarp.canghai.org"
 
 type githubClient struct {
 	http        *http.Client
+	binaryPath  string
 	mu          sync.Mutex
 	currentHash string
 	cachedURL   string
@@ -33,8 +34,8 @@ type githubClient struct {
 	cachedData  []byte
 }
 
-func NewGitHubClient(httpClient *http.Client) *githubClient {
-	return &githubClient{http: httpClient}
+func NewGitHubClient(httpClient *http.Client, binaryPath string) *githubClient {
+	return &githubClient{http: httpClient, binaryPath: binaryPath}
 }
 
 func (c *githubClient) Check(ctx context.Context, current, goos, arch string) (*model.UpdateInfo, error) {
@@ -100,7 +101,7 @@ func (c *githubClient) checkGitHub(ctx context.Context, current, goos, arch stri
 	if digest == "" {
 		return nil, fmt.Errorf("GitHub release %s has no SHA-256 checksum for %s", version, assetName)
 	}
-	currentHash, err := c.runningHash()
+	currentHash, err := c.binaryHash()
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +130,7 @@ func (c *githubClient) checkMirror(ctx context.Context, current, goos, arch stri
 	if digest == "" {
 		return nil, fmt.Errorf("mirror release has no SHA-256 checksum for %s", assetName)
 	}
-	currentHash, err := c.runningHash()
+	currentHash, err := c.binaryHash()
 	if err != nil {
 		return nil, err
 	}
@@ -291,15 +292,13 @@ func (c *githubClient) Download(ctx context.Context, update model.UpdateInfo, wr
 	return nil
 }
 
-func (c *githubClient) runningHash() (string, error) {
+func (c *githubClient) binaryHash() (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.currentHash != "" {
 		return c.currentHash, nil
 	}
-	// /proc/self/exe still references this process's binary after an atomic
-	// replacement of the installed path.
-	file, err := os.Open("/proc/self/exe")
+	file, err := os.Open(c.binaryPath)
 	if err != nil {
 		return "", err
 	}

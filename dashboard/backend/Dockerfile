@@ -16,6 +16,7 @@ RUN go mod download
 COPY dashboard/backend/cmd/baize ./dashboard/backend/cmd/baize
 COPY dashboard/backend/internal/config ./dashboard/backend/internal/config
 COPY dashboard/backend/internal/dashboard ./dashboard/backend/internal/dashboard
+COPY dashboard/frontend ./dashboard/frontend
 COPY shared/model ./shared/model
 COPY shared/rawstream ./shared/rawstream
 COPY shared/agentbinary ./shared/agentbinary
@@ -23,16 +24,12 @@ COPY shared/robotmodel ./shared/robotmodel
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/baize ./dashboard/backend/cmd/baize
 
 FROM ${RUNTIME_IMAGE}
-RUN apk add --no-cache su-exec \
-    && addgroup -S -g 10001 baize \
-    && adduser -S -D -H -u 10001 -G baize baize \
-    && mkdir -p /dashboard/data \
-    && chown baize:baize /dashboard/data
-COPY --from=backend-builder /out/baize /opt/baize/dashboard/bin/baize
-COPY dashboard/frontend /opt/baize/dashboard/frontend
-COPY dashboard/config.yml.example /opt/baize/dashboard/config.yaml.example
-COPY dashboard/backend/entrypoint.sh /opt/baize/dashboard/bin/entrypoint.sh
-RUN chmod 0755 /opt/baize/dashboard/bin/entrypoint.sh
+WORKDIR /dashboard
+RUN mkdir -p /dashboard/data
+COPY --from=backend-builder /out/baize /dashboard/app
+COPY dashboard/config.yml.example /dashboard/config.yaml.example
+COPY dashboard/backend/entrypoint.sh /entrypoint.sh
+RUN chmod 0755 /entrypoint.sh
 EXPOSE 8080
 VOLUME ["/dashboard/data"]
-ENTRYPOINT ["/opt/baize/dashboard/bin/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]

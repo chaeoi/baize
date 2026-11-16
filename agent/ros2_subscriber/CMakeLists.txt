@@ -14,8 +14,10 @@ set(ROS_HUMBLE_LIB_DIRS
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(fastrtps REQUIRED)
 
 add_executable(baize-ros2-subscriber src/main.cpp)
+target_link_libraries(baize-ros2-subscriber fastrtps)
 ament_target_dependencies(baize-ros2-subscriber rclcpp)
 target_compile_options(baize-ros2-subscriber PRIVATE -Wall -Wextra -Wpedantic -Werror)
 set_target_properties(baize-ros2-subscriber PROPERTIES

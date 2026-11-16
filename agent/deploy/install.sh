@@ -10,7 +10,7 @@ robot_code=${BAIZE_ROBOT_CODE:-}
 robot_model=${BAIZE_ROBOT_MODEL:-}
 robot_uuid=${BAIZE_AGENT_UUID:-}
 force_config=false
-config_path=${BAIZE_CONFIG_PATH:-/opt/baize/agent/config.yml}
+config_path=/opt/baize/agent/config.yml
 cachebust=${BAIZE_CACHEBUST:-$(date +%s)}
 
 tty=/dev/tty
