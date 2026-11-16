@@ -232,7 +232,9 @@ func (c *githubClient) downloadAsset(ctx context.Context, address, version strin
 		return err
 	}
 	request.Header.Set("User-Agent", "baize-agent/"+version)
-	response, err := c.http.Do(request)
+	client := *c.http
+	client.Timeout = 2 * time.Minute
+	response, err := client.Do(request)
 	if err != nil {
 		return err
 	}
