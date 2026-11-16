@@ -92,10 +92,14 @@ jobs:
           IMAGE_NAME: ${{ steps.image.outputs.image_name }}
           RELEASE_VERSION: ${{ steps.image.outputs.version }}
         run: |
-          if docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_VERSION" >/dev/null 2>&1; then
+          inspection="$RUNNER_TEMP/baize-image-inspection.log"
+          if docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_VERSION" >/dev/null 2>"$inspection"; then
             echo 'found=true' >> "$GITHUB_OUTPUT"
-          else
+          elif grep -Eq '(: not found|manifest unknown|name unknown)(:|$)' "$inspection"; then
             echo 'found=false' >> "$GITHUB_OUTPUT"
+          else
+            cat "$inspection" >&2
+            exit 1
           fi
 
       - name: 构建镜像并发布

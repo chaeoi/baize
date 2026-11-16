@@ -21,6 +21,7 @@ jobs:
       version: ${{ steps.number.outputs.version }}
       released: ${{ steps.number.outputs.released }}
       latest: ${{ steps.number.outputs.latest }}
+      skip: ${{ steps.number.outputs.skip }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -43,9 +44,9 @@ jobs:
               return subprocess.check_output(["git", *args], text=True).strip()
 
 
-          def month(date):
-              value = datetime.datetime.fromisoformat(date).astimezone(datetime.timezone.utc)
-              return f"{value.year}.{value.month}"
+          def parse_version(value):
+              match = re.fullmatch(r"([2-9][0-9]{3})\.([1-9]|1[0-2])\.([1-9][0-9]*)", value)
+              return tuple(map(int, match.groups())) if match else None
 
 
           def release(path):
@@ -57,31 +58,40 @@ jobs:
               return json.loads(result.stdout)
 
 
+          def output(version="", released=False, latest=False, skip=False):
+              values = {"version": version, "released": str(released).lower(), "latest": str(latest).lower(), "skip": str(skip).lower()}
+              with open(os.environ["GITHUB_OUTPUT"], "a") as destination:
+                  destination.write("".join(f"{name}={value}\n" for name, value in values.items()))
+
+
           head = os.environ["GITHUB_SHA"]
-          history = [line.split() for line in git("log", "--first-parent", "--format=%H %cI", head).splitlines()]
-          prefix = month(history[0][1])
-          pattern = re.compile(re.escape(prefix) + r"\.([1-9][0-9]*)")
-          tags = {}
+          date = datetime.datetime.fromisoformat(git("show", "-s", "--format=%cI", head)).astimezone(datetime.timezone.utc)
+          prefix = (date.year, date.month)
+          tags = []
           for line in git("for-each-ref", "--format=%(refname:strip=2) %(objectname) %(*objectname)", "refs/tags").splitlines():
               name, target, *peeled = line.split()
-              match = pattern.fullmatch(name)
-              if match:
-                  commit = peeled[0] if peeled else target
-                  tags[commit] = max(tags.get(commit, 0), int(match[1]))
-          sequence = 0
-          for commit, date in history:
-              if commit in tags:
-                  sequence += tags[commit]
-                  break
-              sequence += month(date) == prefix
-          if not 0 < sequence <= 4294967295:
-              raise RuntimeError("release sequence is out of range")
-          version = f"{prefix}.{sequence}"
-          reference = subprocess.run(["git", "rev-parse", "--verify", f"refs/tags/{version}^{{commit}}"], text=True, capture_output=True)
-          if reference.returncode == 0:
-              if reference.stdout.strip() != head:
-                  raise RuntimeError(f"release tag {version} already belongs to another commit")
+              number = parse_version(name)
+              if number:
+                  tags.append((number, peeled[0] if peeled else target))
+          assigned = [number for number, target in tags if target == head]
+          if assigned:
+              number = max(assigned)
           else:
+              # An older queued commit must not acquire a higher version than its successor.
+              for target in {target for _, target in tags}:
+                  result = subprocess.run(["git", "merge-base", "--is-ancestor", head, target])
+                  if result.returncode == 0:
+                      output(skip=True)
+                      print("Skipping an unversioned commit superseded by a newer versioned commit.")
+                      raise SystemExit(0)
+                  if result.returncode != 1:
+                      raise RuntimeError("cannot compare release commit ancestry")
+              sequence = max((number[2] for number, _ in tags if number[:2] == prefix), default=0) + 1
+              number = (*prefix, sequence)
+          if not 0 < number[2] <= 4294967295:
+              raise RuntimeError("release sequence is out of range")
+          version = ".".join(map(str, number))
+          if not assigned:
               subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
               subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
               subject = git("show", "-s", "--format=%s", head)
@@ -92,15 +102,15 @@ jobs:
               subprocess.run(["gh", "release", "delete", version, "--repo", os.environ["GITHUB_REPOSITORY"], "--yes"], check=True)
               existing = None
           latest = release("latest")
-          promote = not latest or tuple(map(int, version.split("."))) > tuple(map(int, latest["tag_name"].split(".")))
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"version={version}\nreleased={str(bool(existing)).lower()}\nlatest={str(promote).lower()}\n")
+          promote = not latest or number > parse_version(latest["tag_name"])
+          output(version, released=bool(existing), latest=promote)
           print(f"Release version: {version}")
           PYCODE
 
   go-test:
     name: 测试 Go Agent
     needs: [version]
+    if: needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
@@ -118,7 +128,7 @@ jobs:
   build-agent:
     name: 构建 Linux Agent (${{ matrix.arch }})
     needs: [version, go-test]
-    if: needs.version.outputs.released != 'true'
+    if: needs.version.outputs.skip != 'true' && needs.version.outputs.released != 'true'
     env:
       VERSION: ${{ needs.version.outputs.version }}
     runs-on: ${{ matrix.runner }}
@@ -181,6 +191,7 @@ jobs:
   dashboard:
     name: 发布 Dashboard
     needs: [version, go-test]
+    if: needs.version.outputs.skip != 'true'
     uses: ./.github/workflows/docker-publish.yml
     with:
       version: ${{ needs.version.outputs.version }}
