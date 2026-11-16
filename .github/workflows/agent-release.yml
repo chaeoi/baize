@@ -134,7 +134,7 @@ jobs:
 
   release:
     name: 发布 GitHub Release
-    needs: [build-agent, build-subscriber]
+    needs: [build-agent]
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
@@ -145,7 +145,7 @@ jobs:
       - name: 下载 Agent 构建产物
         uses: actions/download-artifact@v7
         with:
-          pattern: baize-*
+          pattern: baize-agent-*
           merge-multiple: true
           path: dist
 
@@ -153,7 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "$VERSION" > dist/VERSION
-          (cd dist && sha256sum baize-agent-linux-* baize-ros2-subscriber-linux-* > SHA256SUMS)
+          (cd dist && sha256sum baize-agent-linux-* > SHA256SUMS)
 
       - name: 发布 Agent Release
         env:
@@ -174,11 +174,11 @@ jobs:
             printf -- '- Dashboard 镜像：\140%s\140\n' "$image"
             printf -- '- Agent 安装、配置和服务管理：[部署文档](https://github.com/%s/blob/%s/README.md#agent)。\n' "$GITHUB_REPOSITORY" "$VERSION"
             printf '\n## 下载\n\n'
-            printf '| Linux 架构 | Agent | ROS2 订阅器（独立调试） |\n|---|---|---|\n'
+            printf '| Linux 架构 | Agent |\n|---|---|\n'
             for arch in amd64 arm64; do
-              printf '| %s | [baize-agent-linux-%s](%s/baize-agent-linux-%s) | [baize-ros2-subscriber-linux-%s](%s/baize-ros2-subscriber-linux-%s) |\n' "$arch" "$arch" "$base" "$arch" "$arch" "$base" "$arch"
+              printf '| %s | [baize-agent-linux-%s](%s/baize-agent-linux-%s) |\n' "$arch" "$arch" "$base" "$arch"
             done
-            printf '\nAgent 已内嵌 ROS2 订阅器，正常安装只需下载 Agent。机器人需要 ROS2 Humble 运行环境。\n'
+            printf '\nAgent 已内嵌 ROS2 订阅器。机器人需要 ROS2 Humble 运行环境。\n'
             printf '\n## SHA-256\n\n下载附件 \140SHA256SUMS\140 后，可用 \140sha256sum --check --ignore-missing SHA256SUMS\140 校验。\n\n\140\140\140text\n'
             cat dist/SHA256SUMS
             printf '\140\140\140\n'
@@ -191,8 +191,6 @@ jobs:
           gh release create "$VERSION" \
             dist/baize-agent-linux-amd64 \
             dist/baize-agent-linux-arm64 \
-            dist/baize-ros2-subscriber-linux-amd64 \
-            dist/baize-ros2-subscriber-linux-arm64 \
             dist/SHA256SUMS \
             dist/VERSION \
             --verify-tag \
