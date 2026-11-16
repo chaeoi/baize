@@ -530,8 +530,14 @@ func updateService() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	client := agent.NewGitHubClient(&http.Client{Timeout: cfg.Agent.HTTPTimeout.Value()}, installedBinary)
-	candidate, err := client.Check(ctx, "manual", runtime.GOOS, runtime.GOARCH)
+	versionCtx, cancelVersion := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelVersion()
+	output, err := exec.CommandContext(versionCtx, installedBinary, "--version").Output()
+	if err != nil {
+		return fmt.Errorf("read installed Agent version: %w", err)
+	}
+	client := agent.NewGitHubClient(&http.Client{Timeout: cfg.Agent.HTTPTimeout.Value()})
+	candidate, err := client.Check(ctx, strings.TrimSpace(string(output)), runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
 	}

@@ -2,17 +2,7 @@ name: 发布 Docker 镜像
 
 on:
   push:
-    branches: [main]
-    paths:
-      - go.mod
-      - go.sum
-      - dashboard/backend/**
-      - dashboard/frontend/**
-      - dashboard/config.yml.example
-      - shared/model/**
-      - shared/rawstream/**
-      - shared/robotmodel/**
-      - .github/workflows/docker-publish.yml
+    tags: ['[0-9][0-9][0-9][0-9].[0-9]*.[0-9]*']
   pull_request:
     branches: [main]
     paths:
@@ -29,7 +19,7 @@ on:
 
 concurrency:
   group: docker-publish-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -44,15 +34,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 计算提交版本
+      - name: 读取发布版本
         id: image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
-          dashboard_paths=(go.mod go.sum dashboard/backend dashboard/frontend dashboard/config.yml.example shared/model shared/rawstream shared/robotmodel .github/workflows/docker-publish.yml)
-          commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${dashboard_paths[@]}")"
-          version="$(date -u -d "$commit_date" +%Y%m%d)-$GITHUB_SHA"
+          version=dev
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            test "$GITHUB_REF_TYPE" = tag
+            version="$GITHUB_REF_NAME"
+            [[ "$version" =~ ^[2-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$ ]]
+          fi
           image_name="${DOCKERHUB_USERNAME:-${GITHUB_REPOSITORY_OWNER,,}}/baize"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "image_name=$image_name" >> "$GITHUB_OUTPUT"

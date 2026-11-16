@@ -173,10 +173,23 @@ curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/ma
 
 下载脚本只负责选择架构、校验 Release，然后把安装参数传给
 `baize-agent service install`。安装后的 Agent 按 `update.check_interval` 定时直接检查
-GitHub 最新成功发布的 Release（默认经 GitWarp 加速，启动约 5 秒后首次检查、默认每 24 小时），先读取 `SHA256SUMS`，
-与正在运行的二进制比较，仅有变化时下载并校验候选程序，再自动升级。版本和发布标签为
-`日期-完整提交SHA`，同一天的提交可以分别追溯；不再移动同一个日期标签。
+GitHub 最新成功发布的 Release（默认经 GitWarp 加速，启动约 5 秒后首次检查、默认每 24 小时），
+先读取发布附件 `VERSION`，按年、月、序号比较版本。只有远端版本更高时，才从该版本的固定标签
+下载 `SHA256SUMS` 和二进制，校验 SHA-256、程序版本及当前配置后升级。相同或较低版本不下载程序。
 尚未构建成功并发布的源码提交不会安装到机器人上，更新不依赖 Dashboard 在线或参与发布。
+
+正式版本采用 `年.月.发布序号`，从 `2026.11.1` 开始，同月后续版本为 `2026.11.2`、
+`2026.11.3`。每次发布创建新 tag，同一天也使用不同序号；已发布的版本不覆盖。
+推送版本 tag 会构建同版本的 Agent Release 和 Dashboard 镜像，普通分支提交不直接发布：
+
+```bash
+git tag -a --cleanup=verbatim 2026.11.2
+git push origin 2026.11.2
+```
+
+附注 tag 中填写本次发布的主要变化。发布页会使用这段说明，并附上安装入口、架构下载、
+SHA-256 校验和及相邻版本的变更记录。
+
 未传 `--uuid` 时 Agent 生成永久 UUID；也支持 `--force-config`。安装参数只用于写入 `config.yml`，不会成为第二个
 运行时配置来源；已有有效配置默认保留，传入某个参数时只更新对应字段。`--force-config`
 用于从默认模板重新生成配置。可用以下命令查看状态或卸载服务；卸载会删除二进制、配置、

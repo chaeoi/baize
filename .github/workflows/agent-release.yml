@@ -2,19 +2,7 @@ name: 构建并发布 Agent
 
 on:
   push:
-    branches: [main]
-    paths:
-      - go.mod
-      - go.sum
-      - agent/cmd/**
-      - agent/internal/**
-      - agent/deploy/**
-      - agent/ros2_subscriber/**
-      - shared/model/**
-      - shared/rawstream/**
-      - shared/agentbinary/**
-      - shared/robotmodel/**
-      - .github/workflows/agent-release.yml
+    tags: ['[0-9][0-9][0-9][0-9].[0-9]*.[0-9]*']
   workflow_dispatch:
 
 concurrency:
@@ -24,6 +12,9 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  VERSION: ${{ github.ref_name }}
+
 jobs:
   go-test:
     name: 测试 Go Agent
@@ -31,6 +22,10 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v6
+      - name: 校验发布版本
+        run: |
+          test "$GITHUB_REF_TYPE" = tag
+          [[ "$VERSION" =~ ^[2-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$ ]]
       - name: 设置 Go
         uses: actions/setup-go@v7
         with:
@@ -72,22 +67,13 @@ jobs:
           cp "subscriber-dist/baize-ros2-subscriber-linux-${{ matrix.arch }}" \
             agent/internal/service/baize-ros2-subscriber
 
-      - name: 计算提交版本
-        id: version
-        run: |
-          set -euo pipefail
-          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/ros2_subscriber shared/model shared/rawstream shared/agentbinary shared/robotmodel .github/workflows/agent-release.yml)
-          commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
-          echo "version=$(date -u -d "$commit_date" +%Y%m%d)-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-
       - name: 构建静态 Agent
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           GOARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build \
+          CGO_ENABLED=0 GOOS=linux go build \
             -trimpath -buildvcs=false -tags netgo,osusergo \
             -ldflags="-s -w -buildid= -X main.version=$VERSION" \
             -o "dist/baize-agent-linux-$GOARCH" ./agent/cmd/baize-agent
@@ -163,24 +149,44 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: 计算版本并生成校验和
-        id: version
+      - name: 生成发布元数据
         run: |
           set -euo pipefail
-          agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/ros2_subscriber shared/model shared/rawstream shared/agentbinary shared/robotmodel .github/workflows/agent-release.yml)
-          commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
-          version="$(date -u -d "$commit_date" +%Y%m%d)-$GITHUB_SHA"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$VERSION" > dist/VERSION
           (cd dist && sha256sum baize-agent-linux-* baize-ros2-subscriber-linux-* > SHA256SUMS)
 
       - name: 发布 Agent Release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
-          if gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release delete "$VERSION" --yes
+          notes=$(mktemp)
+          if [ "$(git cat-file -t "$VERSION")" = tag ]; then
+            git for-each-ref --format='%(contents)' "refs/tags/$VERSION" > "$notes"
+          else
+            printf 'Baize %s 正式版。\n' "$VERSION" > "$notes"
+          fi
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$VERSION"
+          image="${DOCKERHUB_USERNAME:-${GITHUB_REPOSITORY_OWNER,,}}/baize:$VERSION"
+          {
+            printf '\n## 安装与升级\n\n'
+            printf -- '- Dashboard 镜像：\140%s\140\n' "$image"
+            printf -- '- Agent 安装、配置和服务管理：[部署文档](https://github.com/%s/blob/%s/README.md#agent)。\n' "$GITHUB_REPOSITORY" "$VERSION"
+            printf '\n## 下载\n\n'
+            printf '| Linux 架构 | Agent | ROS2 订阅器（独立调试） |\n|---|---|---|\n'
+            for arch in amd64 arm64; do
+              printf '| %s | [baize-agent-linux-%s](%s/baize-agent-linux-%s) | [baize-ros2-subscriber-linux-%s](%s/baize-ros2-subscriber-linux-%s) |\n' "$arch" "$arch" "$base" "$arch" "$arch" "$base" "$arch"
+            done
+            printf '\nAgent 已内嵌 ROS2 订阅器，正常安装只需下载 Agent。机器人需要 ROS2 Humble 运行环境。\n'
+            printf '\n## SHA-256\n\n下载附件 \140SHA256SUMS\140 后，可用 \140sha256sum --check --ignore-missing SHA256SUMS\140 校验。\n\n\140\140\140text\n'
+            cat dist/SHA256SUMS
+            printf '\140\140\140\n'
+          } >> "$notes"
+          previous=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [[ "$previous" =~ ^[2-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$ ]] && [ "$previous" != "$VERSION" ]; then
+            printf '\n' >> "$notes"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$VERSION" -f previous_tag_name="$previous" --jq .body >> "$notes"
           fi
           gh release create "$VERSION" \
             dist/baize-agent-linux-amd64 \
@@ -188,7 +194,8 @@ jobs:
             dist/baize-ros2-subscriber-linux-amd64 \
             dist/baize-ros2-subscriber-linux-arm64 \
             dist/SHA256SUMS \
-            --target "$GITHUB_SHA" \
-            --title "Baize Agent $VERSION" \
-            --notes "白泽 Agent 提交版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态 Agent、ROS2 C++ Subscriber 和 SHA256SUMS。配置示例保留在源码仓库中。" \
+            dist/VERSION \
+            --verify-tag \
+            --title "Baize $VERSION" \
+            --notes-file "$notes" \
             --latest

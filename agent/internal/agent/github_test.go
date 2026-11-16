@@ -1,15 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -19,87 +17,97 @@ type releaseTransport func(*http.Request) (*http.Response, error)
 
 func (f releaseTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestGitHubDetectsChangedBuildWithSameVersion(t *testing.T) {
-	asset := "baize-agent-linux-" + runtime.GOARCH
-	digest := strings.Repeat("a", 64)
-	client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
-		h := make(http.Header)
-		status, body := 200, digest+"  "+asset+"\n"
-		if r.Method == http.MethodHead {
-			status = 302
-			h.Set("Location", "https://github.com/chaeoi/baize/releases/download/20261116/"+asset)
-		}
-		return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
-	})}, "/proc/self/exe")
-	client.currentHash = strings.Repeat("b", 64)
-	update, err := client.checkGitHub(t.Context(), "20261116", runtime.GOOS, runtime.GOARCH)
-	if err != nil || update == nil || update.SHA256 != digest {
-		t.Fatalf("same-day build missed: %+v %v", update, err)
-	}
-	client.currentHash = digest
-	update, err = client.checkGitHub(t.Context(), "20261116", runtime.GOOS, runtime.GOARCH)
-	if err != nil || update != nil {
-		t.Fatalf("identical build must be skipped: %+v %v", update, err)
+func TestReleaseVersionOrdering(t *testing.T) {
+	for _, test := range []struct {
+		latest, current string
+		newer, invalid  bool
+	}{
+		{latest: "2026.11.1", current: "2026.11.1"},
+		{latest: "2026.11.2", current: "2026.11.1", newer: true},
+		{latest: "2026.11.10", current: "2026.11.9", newer: true},
+		{latest: "2026.11.9", current: "2026.11.10"},
+		{latest: "2026.11.0", current: "2026.9.99", newer: true},
+		{latest: "2027.1.0", current: "2026.12.99", newer: true},
+		{latest: "2026.10.99", current: "2026.11.1"},
+		{latest: "2026.13.1", current: "2026.11.1", invalid: true},
+		{latest: "2026.0.1", current: "2026.11.1", invalid: true},
+		{latest: "2026.11.01", current: "2026.11.1", invalid: true},
+		{latest: "2026.11.1-extra", current: "2026.11.1", invalid: true},
+		{latest: "2026.11.4294967296", current: "2026.11.1", invalid: true},
+		{latest: "2026.11.2", current: "dev", invalid: true},
+		{latest: "20261116", current: "2026.11.1", invalid: true},
+	} {
+		t.Run(test.latest+"/"+test.current, func(t *testing.T) {
+			newer, err := newerVersion(test.latest, test.current)
+			if (err != nil) != test.invalid || newer != test.newer {
+				t.Fatalf("newer=%v error=%v", newer, err)
+			}
+		})
 	}
 }
 
-func TestMirrorChecksManifestAndRetriesConsumedCandidate(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(root, "agent", "cmd", "baize-agent")
-	if err := os.MkdirAll(source, 0700); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string]string{
-		"go.mod":                        "module baize\n\ngo 1.26.5\n",
-		"agent/cmd/baize-agent/main.go": "package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"20261116\")}\n",
-	} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	path := filepath.Join(root, "candidate")
-	command := exec.Command("go", "build", "-o", path, "./agent/cmd/baize-agent")
-	command.Dir = root
-	command.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build fixture: %v %s", err, output)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestMirrorOnlyDownloadsNewerVersionAndPinsAssets(t *testing.T) {
+	asset := "baize-agent-linux-" + runtime.GOARCH
+	data := []byte("release payload")
 	sum := sha256.Sum256(data)
 	digest := hex.EncodeToString(sum[:])
-	asset := "baize-agent-linux-" + runtime.GOARCH
-	downloads, manifests := 0, 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("ETag", "unchanged-etag")
-		if strings.HasSuffix(r.URL.Path, "SHA256SUMS") {
+	versions, manifests, downloads := 0, 0, 0
+	const prefix = "/github.com/chaeoi/baize/releases/"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case prefix + "latest/download/VERSION":
+			versions++
+			fmt.Fprintln(w, "2026.11.2")
+		case prefix + "download/2026.11.2/SHA256SUMS":
 			manifests++
 			fmt.Fprintf(w, "%s  %s\n", digest, asset)
-		} else {
+		case prefix + "download/2026.11.2/" + asset:
 			downloads++
 			w.Write(data)
+		default:
+			t.Errorf("unexpected download: %s", r.URL.Path)
+			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 	t.Setenv("BAIZE_MIRROR", server.URL)
-	client := NewGitHubClient(server.Client(), path)
-	update, err := client.checkMirror(t.Context(), "20261116", runtime.GOOS, runtime.GOARCH)
-	if err != nil || update != nil || downloads != 0 {
-		t.Fatalf("unchanged binary downloaded: %v %v downloads=%d", update, err, downloads)
-	}
-	client.currentHash = strings.Repeat("b", 64)
-	for attempt := 0; attempt < 2; attempt++ {
-		update, err = client.checkMirror(t.Context(), "20261116", runtime.GOOS, runtime.GOARCH)
-		if err != nil || update == nil {
-			t.Fatalf("changed build missed on attempt %d: %v %v", attempt, update, err)
-		}
-		if err := client.Download(t.Context(), *update, io.Discard); err != nil {
-			t.Fatal(err)
+	client := NewGitHubClient(server.Client())
+	for _, current := range []string{"2026.11.2", "2026.11.10"} {
+		update, err := client.Check(t.Context(), current, runtime.GOOS, runtime.GOARCH)
+		if err != nil || update != nil || downloads != 0 || manifests != 0 {
+			t.Fatalf("unchanged or older release downloaded: %+v %v", update, err)
 		}
 	}
-	if downloads != 2 || manifests != 3 {
-		t.Fatalf("downloads=%d manifests=%d", downloads, manifests)
+	update, err := client.Check(t.Context(), "2026.11.1", runtime.GOOS, runtime.GOARCH)
+	if err != nil || update == nil || update.Version != "2026.11.2" || update.SHA256 != digest {
+		t.Fatalf("new release missed: %+v %v", update, err)
+	}
+	if downloads != 0 {
+		t.Fatal("version check downloaded an executable")
+	}
+	var output bytes.Buffer
+	if err := client.Download(t.Context(), *update, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(output.Bytes(), data) || versions != 3 || manifests != 1 || downloads != 1 {
+		t.Fatalf("versions=%d manifests=%d downloads=%d", versions, manifests, downloads)
+	}
+}
+
+func TestReleaseCheckFallsBackToGitHub(t *testing.T) {
+	t.Setenv("BAIZE_MIRROR", "https://mirror.example")
+	asset := "baize-agent-linux-" + runtime.GOARCH
+	client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+		status, body := http.StatusOK, "2026.11.2\n"
+		if r.URL.Host == "mirror.example" {
+			status = http.StatusBadGateway
+		} else if strings.HasSuffix(r.URL.Path, "/SHA256SUMS") {
+			body = strings.Repeat("a", 64) + "  " + asset + "\n"
+		}
+		return &http.Response{StatusCode: status, Status: http.StatusText(status), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})})
+	update, err := client.Check(t.Context(), "2026.11.1", runtime.GOOS, runtime.GOARCH)
+	if err != nil || update == nil || update.URL != "https://github.com/chaeoi/baize/releases/download/2026.11.2/"+asset {
+		t.Fatalf("fallback failed: %+v %v", update, err)
 	}
 }
