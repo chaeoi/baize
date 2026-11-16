@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 
 	"baize/shared/model"
@@ -134,6 +136,45 @@ func main(){for i,arg:=range os.Args[1:]{if arg=="--version"{fmt.Println("2026.1
 type testUpdateDownloader struct {
 	client *http.Client
 	url    string
+}
+
+func TestUpdateLockIsSharedAcrossTemporaryDirectories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '2026.11.1\\n'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	path, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := sha256.Sum256([]byte(path))
+	lockPath := filepath.Join("/tmp", fmt.Sprintf("baize-agent-update-%x.lock", identity[:8]))
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(lockPath)
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
+	t.Setenv("TMPDIR", t.TempDir())
+	download := &lockTestDownloader{}
+	err = ApplyUpdate(t.Context(), download, model.UpdateInfo{
+		Version: "2026.11.2", OS: runtime.GOOS, Arch: runtime.GOARCH,
+	}, path, path+".yml", nil)
+	if !errors.Is(err, syscall.EWOULDBLOCK) || download.calls != 0 {
+		t.Fatalf("shared update lock was bypassed: downloads=%d, error=%v", download.calls, err)
+	}
+}
+
+type lockTestDownloader struct{ calls int }
+
+func (d *lockTestDownloader) Download(context.Context, model.UpdateInfo, io.Writer) error {
+	d.calls++
+	return errors.New("unexpected update download while the shared lock is held")
 }
 
 func (d testUpdateDownloader) Download(ctx context.Context, _ model.UpdateInfo, writer io.Writer) error {

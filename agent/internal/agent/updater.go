@@ -37,9 +37,9 @@ func ApplyUpdate(ctx context.Context, client UpdateDownloader, update model.Upda
 }
 
 func applyUpdate(ctx context.Context, client UpdateDownloader, update model.UpdateInfo, executable string, arguments []string, beforeReplace func() error) error {
-	// A stable lock coordinates service and manual checks across atomic renames.
+	// Share a lock across atomic renames and different TMPDIR settings.
 	identity := sha256.Sum256([]byte(executable))
-	lockPath := filepath.Join(os.TempDir(), fmt.Sprintf("baize-agent-update-%x.lock", identity[:8]))
+	lockPath := filepath.Join("/tmp", fmt.Sprintf("baize-agent-update-%x.lock", identity[:8]))
 	fd, err := syscall.Open(lockPath, syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		return fmt.Errorf("open update lock: %w", err)
