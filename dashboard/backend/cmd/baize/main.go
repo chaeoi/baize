@@ -69,7 +69,7 @@ func main() {
 	}
 	handler := dashboard.NewServer(dashboard.ServerConfig{
 		AgentToken: agentToken, AdminUser: dashboardconfig.AdminUsername,
-		JWTSecret: jwtSecret, FrontendDir: cfg.Dashboard.FrontendDir, RecordingDir: cfg.Dashboard.RecordingDir, CookieSecure: cfg.Dashboard.CookieSecure,
+		JWTSecret: jwtSecret, RecordingDir: cfg.Dashboard.RecordingDir, CookieSecure: cfg.Dashboard.CookieSecure,
 	}, store)
 	defer func() {
 		if err := handler.Close(); err != nil {

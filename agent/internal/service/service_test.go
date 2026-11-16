@@ -189,23 +189,14 @@ func TestDefaultConfigIsGeneratedButIntentionallyInvalid(t *testing.T) {
 
 func TestServiceUnitRunsInstalledBinaryWithConfig(t *testing.T) {
 	unit := serviceUnit()
-	expected := "ExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml"
-	if !strings.Contains(unit, expected) || !strings.Contains(unit, "StateDirectory=baize-agent") {
+	expected := "ExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml"
+	if !strings.Contains(unit, expected) {
 		t.Fatalf("unexpected service unit: %s", unit)
 	}
-	for _, required := range []string{"User=baize-agent", "Group=baize-agent", "NoNewPrivileges=true", "ReadWritePaths=/opt/baize/agent/bin", "ReadOnlyPaths=/opt/baize/agent/config.yml", "FASTRTPS_DEFAULT_PROFILES_FILE="} {
+	for _, required := range []string{"User=root", "Group=root", "NoNewPrivileges=true", "ProtectSystem=full", "ROS_LOG_DIR=/opt/baize/agent/data/ros"} {
 		if !strings.Contains(unit, required) {
 			t.Fatalf("service unit missing %q: %s", required, unit)
 		}
-	}
-}
-
-func TestBinaryPathIsSeparateFromAdministrativeLauncher(t *testing.T) {
-	if BinaryPath() != "/opt/baize/agent/bin/baize-agent" {
-		t.Fatalf("unexpected binary path: %s", BinaryPath())
-	}
-	if filepath.Dir(BinaryPath()) != filepath.Join(installDir, "bin") {
-		t.Fatalf("worker must sit in the service-owned runtime directory: %s", BinaryPath())
 	}
 }
 
@@ -214,7 +205,7 @@ func TestUninstallPathsCoverEverythingTheAgentCreates(t *testing.T) {
 	for _, path := range uninstallPaths() {
 		present[path] = true
 	}
-	for _, want := range []string{installDir, stateDir, logDir} {
+	for _, want := range []string{installDir} {
 		if !present[want] {
 			t.Fatalf("uninstall leaves %s behind: %v", want, uninstallPaths())
 		}

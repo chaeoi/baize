@@ -1,33 +1,32 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/sys/unix"
 
+	"baize/agent/internal/agent"
 	"baize/agent/internal/config"
 )
 
-const (
-	serviceName = "baize-agent"
-	serviceUser = "baize-agent"
-	stateDir    = "/var/lib/baize-agent"
-	logDir      = "/var/log/baize-agent"
-)
+const serviceName = "baize-agent"
 
 // The release workflow replaces this development stub with the C++ binary for
 // the target architecture before compiling the static Go Agent.
@@ -35,20 +34,12 @@ const (
 //go:embed baize-ros2-subscriber
 var embeddedROS2Subscriber []byte
 
-//go:embed ros2-udp.xml
-var ros2UDPProfile []byte
-
 var (
 	installDir      = "/opt/baize/agent"
 	installedBinary = filepath.Join(installDir, "baize-agent")
-	runtimeBinary   = filepath.Join(installDir, "bin", "baize-agent")
 	installedConfig = filepath.Join(installDir, "config.yml")
 	unitPath        = "/etc/systemd/system/baize-agent.service"
 )
-
-// BinaryPath is writable only by the service account. Administrative commands
-// and the supervisor use the separate root-owned launcher.
-func BinaryPath() string { return runtimeBinary }
 
 var ros2SubscriberMemfd *os.File
 
@@ -90,11 +81,19 @@ func Execute(arguments []string, executablePath string) error {
 			return errors.New("service uninstall takes no options")
 		}
 		return uninstall()
-	case "status":
+	case "start", "stop", "restart", "status", "update":
 		if len(arguments) != 1 {
-			return errors.New("service status takes no options")
+			return fmt.Errorf("service %s takes no options", arguments[0])
 		}
-		return runCommand("systemctl", "status", serviceName+".service")
+		if arguments[0] != "status" {
+			if err := requireRoot(); err != nil {
+				return err
+			}
+		}
+		if arguments[0] == "update" {
+			return updateService()
+		}
+		return runCommand("systemctl", arguments[0], serviceName+".service")
 	default:
 		return fmt.Errorf("unknown service command: %s", arguments[0])
 	}
@@ -160,72 +159,32 @@ func install(options installOptions, executablePath string) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureServiceUser(); err != nil {
-		return err
-	}
-	account, err := user.Lookup(serviceUser)
-	if err != nil {
-		return err
-	}
-	uid, err := strconv.Atoi(account.Uid)
-	if err != nil || uid == 0 {
-		return fmt.Errorf("service account must have a nonzero UID: %q", account.Uid)
-	}
-	gid, err := strconv.Atoi(account.Gid)
-	if err != nil {
-		return err
-	}
 	_ = runCommand("systemctl", "stop", serviceName+".service")
-	for _, dir := range []string{filepath.Dir(installDir), installDir} {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return err
-		}
-		if err := os.Chown(dir, 0, 0); err != nil {
-			return err
-		}
-		if err := os.Chmod(dir, 0o750); err != nil {
-			return err
-		}
-	}
-	if err := os.Chmod(filepath.Dir(installDir), 0o755); err != nil {
+	if err := os.MkdirAll(installDir, 0755); err != nil {
 		return err
 	}
-	if err := os.Chown(installDir, 0, gid); err != nil {
+	if err := os.Chown(installDir, 0, 0); err != nil {
+		return err
+	}
+	if err := os.Chmod(installDir, 0755); err != nil {
 		return err
 	}
 	if err := installBinary(executablePath, installedBinary, 0, 0); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(runtimeBinary), 0o750); err != nil {
-		return err
-	}
-	if err := os.Chown(filepath.Dir(runtimeBinary), uid, gid); err != nil {
-		return err
-	}
-	if err := installBinary(installedBinary, runtimeBinary, uid, gid); err != nil {
-		return err
-	}
-	for _, suffix := range []string{".pending", ".previous", ".rejected"} {
-		if err := os.Remove(runtimeBinary + suffix); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
 	if plan.replace {
-		if err := writeFileAtomic(installedConfig, plan.content, 0o640, 0, gid); err != nil {
+		if err := writeFileAtomic(installedConfig, plan.content, 0o600, 0, 0); err != nil {
 			return err
 		}
 	} else {
-		if err := os.Chown(installedConfig, 0, gid); err != nil {
+		if err := os.Chown(installedConfig, 0, 0); err != nil {
 			return fmt.Errorf("set config ownership: %w", err)
 		}
-		if err := os.Chmod(installedConfig, 0o640); err != nil {
+		if err := os.Chmod(installedConfig, 0o600); err != nil {
 			return fmt.Errorf("set config permissions: %w", err)
 		}
 	}
 
-	if err := writeFileAtomic(filepath.Join(installDir, "ros2-udp.xml"), ros2UDPProfile, 0o644, 0, 0); err != nil {
-		return err
-	}
 	if err := writeFileAtomic(unitPath, []byte(serviceUnit()), 0o644, 0, 0); err != nil {
 		return err
 	}
@@ -270,9 +229,9 @@ func uninstall() error {
 	return nil
 }
 
-// uninstallPaths contains the service's install tree, state and logs.
+// Runtime data and ROS logs live inside the install tree.
 func uninstallPaths() []string {
-	return []string{installDir, stateDir, logDir}
+	return []string{installDir}
 }
 
 type configPlan struct {
@@ -552,7 +511,7 @@ func defaultConfig(uuid string) string {
 	}
 	lines.WriteString("model: \"\"\n\nagent:\n  uuid: ")
 	lines.WriteString(yamlString(uuid))
-	lines.WriteString("\n  robot_code: \"\"\n  dashboard_url: \"\"\n  token: \"\"\n  report_interval: \"2s\"\n  http_timeout: \"10s\"\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  check_interval: \"1m\"\n")
+	lines.WriteString("\n  robot_code: \"\"\n  dashboard_url: \"\"\n  token: \"\"\n  report_interval: \"2s\"\n  http_timeout: \"10s\"\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  check_interval: \"24h\"\n")
 	return lines.String()
 }
 
@@ -564,23 +523,34 @@ func containsControl(value string) bool {
 	return strings.IndexFunc(value, unicode.IsControl) >= 0
 }
 
-func ensureServiceUser() error {
-	if _, err := user.Lookup(serviceUser); err != nil {
-		if _, ok := err.(user.UnknownUserError); !ok {
+func updateService() error {
+	cfg, err := config.Load(installedConfig)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client := agent.NewGitHubClient(&http.Client{Timeout: cfg.Agent.HTTPTimeout.Value()}, installedBinary)
+	candidate, err := client.Check(ctx, "manual", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	if candidate == nil {
+		fmt.Println("baize-agent is up to date")
+		return nil
+	}
+	stopped := false
+	err = agent.ApplyUpdate(ctx, client, *candidate, installedBinary, installedConfig, func() error {
+		if err := runCommand("systemctl", "stop", serviceName+".service"); err != nil {
 			return err
 		}
-		if err := runCommand("useradd", "--system", "--user-group", "--home-dir", stateDir, "--no-create-home", "--shell", "/usr/sbin/nologin", serviceUser); err != nil {
-			return err
-		}
+		stopped = true
+		return nil
+	})
+	if stopped {
+		err = errors.Join(err, runCommand("systemctl", "start", serviceName+".service"))
 	}
-	for _, group := range []string{"video", "render"} {
-		if _, err := user.LookupGroup(group); err == nil {
-			if err := runCommand("usermod", "--append", "--groups", group, serviceUser); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return err
 }
 
 func serviceUnit() string {
@@ -591,24 +561,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=baize-agent
-Group=baize-agent
+User=root
+Group=root
 WorkingDirectory=/opt/baize/agent
-ExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml
+ExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml
 Restart=always
 RestartSec=3
-UMask=0027
+UMask=0077
 NoNewPrivileges=true
-CapabilityBoundingSet=
-ProtectSystem=strict
-ReadWritePaths=/opt/baize/agent/bin
-ReadOnlyPaths=/opt/baize/agent/config.yml /opt/baize/agent/ros2-udp.xml
-Environment=FASTRTPS_DEFAULT_PROFILES_FILE=/opt/baize/agent/ros2-udp.xml
-Environment=ROS_LOG_DIR=/var/log/baize-agent/ros
-LogsDirectory=baize-agent
-LogsDirectoryMode=0750
-StateDirectory=baize-agent
-StateDirectoryMode=0750
+ProtectSystem=full
+Environment=ROS_LOG_DIR=/opt/baize/agent/data/ros
 
 [Install]
 WantedBy=multi-user.target
@@ -620,7 +582,11 @@ const serviceUsage = `Usage: baize-agent service <command>
 Commands:
   install    install or update the systemd service
   uninstall  stop and remove the service, binaries, config, state and logs
+  start      start the service
+  stop       stop the service
+  restart    restart the service
   status     show systemd status
+  update     check and install the latest published build
 `
 
 const installUsage = `Usage: baize-agent service install [options]

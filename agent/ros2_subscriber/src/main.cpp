@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <cmath>
 #include <cctype>
 #include <chrono>
@@ -11,6 +12,7 @@
 #include <string>
 #include <utility>
 
+#include <fastdds/dds/domain/DomainParticipantFactory.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #ifndef BAIZE_ROS2_SUBSCRIBER_VERSION
@@ -18,6 +20,43 @@
 #endif
 
 namespace {
+
+// Keep the transport profile in memory; ROS_LOCALHOST_ONLY=1 would add SHM
+// back in Humble, so the profile restricts UDP to loopback itself.
+void configureLocalTransport() {
+  constexpr char profile[] = R"ROS_PROFILE(<?xml version="1.0" encoding="UTF-8"?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_transport</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList><address>127.0.0.1</address></interfaceWhiteList>
+      <maxInitialPeersRange>100</maxInitialPeersRange>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="monitor_udp" is_default_profile="true">
+    <rtps>
+      <builtin>
+        <initialPeersList>
+          <locator><udpv4><address>127.0.0.1</address></udpv4></locator>
+        </initialPeersList>
+      </builtin>
+      <userTransports><transport_id>udp_transport</transport_id></userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>
+)ROS_PROFILE";
+  auto *factory = eprosima::fastdds::dds::DomainParticipantFactory::get_instance();
+  if (factory->load_XML_profiles_string(profile, sizeof(profile) - 1) !=
+      ReturnCode_t::RETCODE_OK) {
+    throw std::runtime_error("cannot load ROS2 transport profile");
+  }
+  // The XML owns loopback restriction; Humble's localhost switch adds SHM.
+  if (::setenv("ROS_LOCALHOST_ONLY", "0", 1) != 0) {
+    throw std::runtime_error("cannot configure ROS2 transport");
+  }
+}
 
 std::mutex output_mutex;
 
@@ -159,6 +198,7 @@ int main(int argc, char **argv) {
       usage(std::cerr);
       return 2;
     }
+    configureLocalTransport();
     rclcpp::init(0, nullptr);
     auto node = std::make_shared<Subscriber>(topic, message_type, read_timeout);
     rclcpp::spin(node);

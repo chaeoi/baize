@@ -21,4 +21,4 @@ gpu:
 
 update:
   enabled: true
-  check_interval: "1m"
+  check_interval: "24h"

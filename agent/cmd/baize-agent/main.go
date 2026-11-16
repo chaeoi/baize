@@ -46,17 +46,13 @@ func main() {
 	flags := flag.NewFlagSet("baize-agent", flag.ExitOnError)
 	flags.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: baize-agent [run] [options]")
-		fmt.Fprintln(os.Stderr, "       baize-agent service <install|uninstall|status>")
+		fmt.Fprintln(os.Stderr, "       baize-agent service <install|uninstall|start|stop|restart|status|update>")
 		flags.PrintDefaults()
 	}
 	configPath := flags.String("config", "/opt/baize/agent/config.yml", "Agent configuration file")
 	showVersion := flags.Bool("version", false, "print version and exit")
 	checkConfig := flags.Bool("check-config", false, "validate configuration and built-in robot model, then exit")
 	arguments := os.Args[1:]
-	supervise := len(arguments) > 0 && arguments[0] == "supervise"
-	if supervise {
-		arguments = arguments[1:]
-	}
 	if len(arguments) > 0 && arguments[0] == "run" {
 		arguments = arguments[1:]
 	}
@@ -67,15 +63,6 @@ func main() {
 	}
 	if *showVersion {
 		fmt.Println(version)
-		return
-	}
-	if supervise {
-		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-		defer stop()
-		if err := agent.Supervise(ctx, service.BinaryPath(), *configPath); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("Agent supervisor stopped", "error", err)
-			os.Exit(1)
-		}
 		return
 	}
 	cfg, err := config.Load(*configPath)
@@ -89,42 +76,28 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(ctx, cfg, *configPath); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("agent stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, cfg config.Config) error {
+func run(ctx context.Context, cfg config.Config, configPath string) error {
 	ctx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	managedSubscriber := os.Getenv("BAIZE_ROS2_SUBSCRIBER") == ""
 	ros2Subscriber, err := service.PrepareROS2Subscriber()
 	if err != nil {
 		slog.Warn("prepare ROS2 subscriber", "error", err)
 	} else if err := os.Setenv("BAIZE_ROS2_SUBSCRIBER", ros2Subscriber); err != nil {
 		return fmt.Errorf("configure ROS2 subscriber: %w", err)
 	}
-	if managedSubscriber {
-		_ = os.Setenv("BAIZE_MANAGED_SUBSCRIBER", "1")
-	}
 	hostname, _ := os.Hostname()
 	httpClient := &http.Client{Timeout: cfg.Agent.HTTPTimeout.Value()}
 	dashboardClient := agent.NewClient(cfg.Agent.DashboardURL, cfg.Agent.Token, httpClient)
-	directory := os.Getenv("STATE_DIRECTORY")
-	if directory == "" {
-		cache, err := os.UserCacheDir()
-		if err != nil {
-			return err
-		}
-		directory = filepath.Join(cache, "baize-agent", cfg.Agent.UUID)
-	}
+	directory := filepath.Join(filepath.Dir(configPath), "data")
 	outbox, err := agent.NewRawOutbox(agent.RawCachePath(directory), cfg.Agent.RawCacheBytes)
 	if err != nil {
 		return fmt.Errorf("open raw outbox: %w", err)
-	}
-	if err := agent.ConfirmUpdate(); err != nil {
-		slog.Warn("confirm Agent startup", "error", err)
 	}
 	sourceCtx, stopSources := context.WithCancel(ctx)
 	defer stopSources()
@@ -251,7 +224,7 @@ func run(ctx context.Context, cfg config.Config) error {
 		return nil
 	}
 	if cfg.Update.Enabled && version != "dev" {
-		go updateLoop(ctx, cfg, httpClient, updates)
+		go updateLoop(ctx, cfg, configPath, httpClient, updates)
 	}
 	ticker := time.NewTicker(cfg.Agent.RawBatchInterval.Value())
 	defer ticker.Stop()
@@ -282,15 +255,21 @@ func run(ctx context.Context, cfg config.Config) error {
 			if err != nil {
 				return err
 			}
-			// A successful exec never returns. On failure let the supervisor
-			// restart the old binary, with the pending data safely on disk.
+			// Exit after replacement so systemd starts the installed binary.
+			// A failed replacement leaves the current binary and cached data intact.
 			return <-update.finished
 		}
 	}
 }
 
-func updateLoop(ctx context.Context, cfg config.Config, httpClient *http.Client, updates chan<- updateHandoff) {
-	client := agent.NewGitHubClient(httpClient)
+func updateLoop(ctx context.Context, cfg config.Config, configPath string, httpClient *http.Client, updates chan<- updateHandoff) {
+	executable, err := os.Executable()
+	if err != nil {
+		slog.Error("find Agent executable for updates", "error", err)
+		return
+	}
+	// Keep comparing the running build even if the installed path is replaced.
+	client := agent.NewGitHubClient(httpClient, "/proc/self/exe")
 	check := func() {
 		checkCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
 		defer cancel()
@@ -304,7 +283,7 @@ func updateLoop(ctx context.Context, cfg config.Config, httpClient *http.Client,
 		}
 		slog.Info("prepare agent update", "from", version, "to", update.Version)
 		handoff := updateHandoff{ready: make(chan error, 1), finished: make(chan error, 1)}
-		err = agent.ApplyUpdate(ctx, client, *update, func() error {
+		err = agent.ApplyUpdate(ctx, client, *update, executable, configPath, func() error {
 			select {
 			case updates <- handoff:
 			case <-ctx.Done():
@@ -320,6 +299,8 @@ func updateLoop(ctx context.Context, cfg config.Config, httpClient *http.Client,
 		handoff.finished <- err
 		if err != nil {
 			slog.Error("apply update", "error", err)
+		} else {
+			slog.Info("Agent updated; restarting service", "version", update.Version)
 		}
 	}
 	timer := time.NewTimer(5 * time.Second)

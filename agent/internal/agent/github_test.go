@@ -30,7 +30,7 @@ func TestGitHubDetectsChangedBuildWithSameVersion(t *testing.T) {
 			h.Set("Location", "https://github.com/chaeoi/baize/releases/download/20261116/"+asset)
 		}
 		return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
-	})})
+	})}, "/proc/self/exe")
 	client.currentHash = strings.Repeat("b", 64)
 	update, err := client.checkGitHub(t.Context(), "20261116", runtime.GOOS, runtime.GOARCH)
 	if err != nil || update == nil || update.SHA256 != digest {
@@ -84,8 +84,7 @@ func TestMirrorChecksManifestAndRetriesConsumedCandidate(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("BAIZE_MIRROR", server.URL)
-	client := NewGitHubClient(server.Client())
-	client.currentHash = digest
+	client := NewGitHubClient(server.Client(), path)
 	update, err := client.checkMirror(t.Context(), "20261116", runtime.GOOS, runtime.GOARCH)
 	if err != nil || update != nil || downloads != 0 {
 		t.Fatalf("unchanged binary downloaded: %v %v downloads=%d", update, err, downloads)

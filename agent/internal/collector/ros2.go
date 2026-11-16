@@ -3,7 +3,6 @@ package collector
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -45,11 +44,6 @@ func rosCommand(setupFiles []string, environment map[string]string, finalCommand
 			return "", fmt.Errorf("invalid ROS environment variable %q", name)
 		}
 		parts = append(parts, "export "+name+"="+shellQuote(value))
-	}
-	if profile := os.Getenv("FASTRTPS_DEFAULT_PROFILES_FILE"); filepath.Base(profile) == "ros2-udp.xml" {
-		// Humble adds SHM back when ROS_LOCALHOST_ONLY=1, even with an XML
-		// transport override. This profile restricts UDP to loopback itself.
-		parts = append(parts, "export FASTRTPS_DEFAULT_PROFILES_FILE="+shellQuote(profile), "export ROS_LOCALHOST_ONLY='0'")
 	}
 	parts = append(parts, "exec "+finalCommand)
 	command := strings.Join(parts, " && ")

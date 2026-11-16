@@ -3,9 +3,11 @@
 
 import argparse
 import math
+import signal
 
 import rclpy
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import JointState
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
@@ -67,9 +69,11 @@ def main() -> None:
     parser.add_argument("--battery-rate", type=float, default=5.0)
     args = parser.parse_args()
 
-    rclpy.init()
     if args.rate <= 0 or args.battery_rate <= 0:
         parser.error("publish rates must be positive")
+    # Stop spin before shutting down its context, including on container stop.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     node = BaizeSimulation(args.motor_topic, args.battery_topic, args.rate, args.battery_rate)
     try:
         rclpy.spin(node)
@@ -77,7 +81,7 @@ def main() -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

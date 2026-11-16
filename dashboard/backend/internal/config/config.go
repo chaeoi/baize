@@ -46,7 +46,6 @@ type DashboardConfig struct {
 	HistoryDataDir        string
 	HistoryRetention      Duration
 	HistorySampleInterval Duration
-	FrontendDir           string
 	CookieSecure          bool
 }
 
@@ -61,7 +60,6 @@ func Default() Config {
 		HistoryDataDir:        "/dashboard/data/history",
 		HistoryRetention:      Duration(90 * 24 * time.Hour),
 		HistorySampleInterval: Duration(2 * time.Second),
-		FrontendDir:           "/opt/baize/dashboard/frontend",
 	}}
 }
 
@@ -73,7 +71,6 @@ type fileDashboardConfig struct {
 	HistoryDataDir        *string   `yaml:"history_data_dir"`
 	HistoryRetention      *Duration `yaml:"history_retention"`
 	HistorySampleInterval *Duration `yaml:"history_sample_interval"`
-	FrontendDir           *string   `yaml:"frontend_dir"`
 	CookieSecure          *bool     `yaml:"cookie_secure"`
 }
 
@@ -122,9 +119,6 @@ func Load(path string) (Config, error) {
 	if d.HistorySampleInterval != nil {
 		cfg.Dashboard.HistorySampleInterval = *d.HistorySampleInterval
 	}
-	if d.FrontendDir != nil {
-		cfg.Dashboard.FrontendDir = *d.FrontendDir
-	}
 	if d.CookieSecure != nil {
 		cfg.Dashboard.CookieSecure = *d.CookieSecure
 	}
@@ -165,9 +159,6 @@ func (c Config) Validate() error {
 	}
 	if d.HistorySampleInterval.Value() < 2*time.Second {
 		return errors.New("dashboard.history_sample_interval must be at least 2s")
-	}
-	if !filepath.IsAbs(d.FrontendDir) {
-		return errors.New("dashboard.frontend_dir must be an absolute path")
 	}
 	return nil
 }

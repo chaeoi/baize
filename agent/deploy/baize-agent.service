@@ -5,24 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=baize-agent
-Group=baize-agent
+User=root
+Group=root
 WorkingDirectory=/opt/baize/agent
-ExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml
+ExecStart=/opt/baize/agent/baize-agent run --config /opt/baize/agent/config.yml
 Restart=always
 RestartSec=3
-UMask=0027
+UMask=0077
 NoNewPrivileges=true
-CapabilityBoundingSet=
-ProtectSystem=strict
-ReadWritePaths=/opt/baize/agent/bin
-ReadOnlyPaths=/opt/baize/agent/config.yml /opt/baize/agent/ros2-udp.xml
-Environment=FASTRTPS_DEFAULT_PROFILES_FILE=/opt/baize/agent/ros2-udp.xml
-Environment=ROS_LOG_DIR=/var/log/baize-agent/ros
-LogsDirectory=baize-agent
-LogsDirectoryMode=0750
-StateDirectory=baize-agent
-StateDirectoryMode=0750
+ProtectSystem=full
+Environment=ROS_LOG_DIR=/opt/baize/agent/data/ros
 
 [Install]
 WantedBy=multi-user.target
