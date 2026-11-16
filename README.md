@@ -172,10 +172,11 @@ curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/ma
 ```
 
 下载脚本只负责选择架构、校验 Release，然后把安装参数传给
-`baize-agent service install`。安装后的 Agent 按 `update.check_interval` 定时直接检查
-GitHub 最新成功发布的 Release（默认经 GitWarp 加速，启动约 5 秒后首次检查、默认每 24 小时），
-先读取发布附件 `VERSION`，按年、月、序号比较版本。只有远端版本更高时，才从该版本的固定标签
+`baize-agent service install`。安装后的 Agent 按 `update.check_interval` 定时检查
+GitHub 最新成功发布的 Release，启动约 5 秒后首次检查、默认每 24 小时。
+检查时只读取 GitHub 最新 Release 跳转地址中的版本标签，按年、月、序号比较。只有远端版本更高时，才从该版本的固定标签
 下载 `SHA256SUMS` 和二进制，校验 SHA-256、程序版本及当前配置后升级。相同或较低版本不下载程序。
+文件下载默认经 GitWarp 加速。
 尚未构建成功并发布的源码提交不会安装到机器人上，更新不依赖 Dashboard 在线或参与发布。
 
 正式版本采用 `年.月.发布序号`，从 `2026.11.1` 开始，同月后续版本为 `2026.11.2`、
