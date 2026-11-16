@@ -19,7 +19,6 @@
       <h1>进入控制台</h1>
       <p class="login-copy">查看设备状态与身份信息。</p>
       <form id="login-form" class="login-form">
-        <input id="username" name="username" type="text" value="admin" autocomplete="username" hidden>
         <label for="password">管理密码</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required>
         <button class="button primary full" type="submit"><i data-lucide="log-in"></i><span>登录控制台</span></button>
@@ -36,7 +35,6 @@
       <h1>更新管理密码</h1>
       <p id="password-change-copy" class="login-copy">继续前必须替换初始密码。</p>
       <form id="password-change-form" class="login-form">
-        <input name="username" type="text" autocomplete="username" hidden>
         <label for="current-password">当前密码</label>
         <input id="current-password" name="current_password" type="password" autocomplete="current-password" required>
         <label for="new-password">新密码</label>
@@ -122,7 +120,7 @@
     </main>
 
     <main id="settings-view" class="settings-view hidden" tabindex="-1">
-      <header class="settings-header"><div><span class="eyebrow">Private workspace</span><h1>设备管理</h1><p>查看接入状态，维护设备备注。</p></div><div class="settings-header-actions"><button id="open-install-button" class="button primary" type="button" title="获取安装命令" aria-label="获取安装命令"><i data-lucide="terminal"></i><span>安装 Agent</span></button><span class="session-badge"><i data-lucide="shield-check"></i><span id="settings-session">admin</span></span><a class="button subtle" href="/"><i data-lucide="layout-dashboard"></i><span>展示页</span></a></div></header>
+      <header class="settings-header"><div><span class="eyebrow">Private workspace</span><h1>设备管理</h1><p>查看接入状态，维护设备备注。</p></div><div class="settings-header-actions"><button id="open-install-button" class="button primary" type="button" title="获取安装命令" aria-label="获取安装命令"><i data-lucide="terminal"></i><span>安装 Agent</span></button><span class="session-badge"><i data-lucide="shield-check"></i><span id="settings-session">管理员</span></span><a class="button subtle" href="/"><i data-lucide="layout-dashboard"></i><span>展示页</span></a></div></header>
       <div class="settings-layout">
         <aside class="settings-directory settings-section"><div class="section-head"><div><span class="eyebrow">Fleet registry</span><h2>设备目录</h2></div><span id="settings-count" class="count-badge">0</span></div><div id="settings-robot-list" class="settings-robot-list"></div></aside>
         <section class="settings-workspace">
@@ -141,6 +139,6 @@
   <dialog id="install-dialog"><form id="install-form" class="dialog-form"><div class="dialog-heading"><div><span class="eyebrow">Agent installation</span><h2>一键安装 Agent</h2></div><button class="icon-button dialog-close" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><p class="dialog-copy">在机器人终端粘贴并运行命令，将自动下载对应架构二进制并注册 systemd 服务。</p><div class="install-form-grid"><label>机器人型号<select id="install-model-select"></select></label><label>设备编号<input id="install-robot-code" type="text" placeholder="例如 M05 或 M99" autocomplete="off" required></label></div><div class="install-command-wrap"><label for="install-command-preview">安装命令预览</label><textarea id="install-command-preview" readonly rows="5" spellcheck="false"></textarea></div><div class="dialog-actions"><button class="button subtle dialog-close" type="button">关闭</button><button id="copy-install-command" class="button primary" type="submit"><i data-lucide="copy"></i><span>复制安装命令</span></button></div></form></dialog>
   <div id="toast" class="toast" role="status"></div>
   <script src="/vendor/lucide.min.js"></script>
-  <script src="/app.js?v=15" defer></script>
+  <script src="/app.js?v=16" defer></script>
 </body>
 </html>

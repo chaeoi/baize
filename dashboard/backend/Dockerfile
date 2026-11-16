@@ -23,7 +23,11 @@ COPY shared/robotmodel ./shared/robotmodel
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -buildid= -X main.version=${VERSION}" -o /out/baize ./dashboard/backend/cmd/baize
 
 FROM ${RUNTIME_IMAGE}
-RUN mkdir -p /dashboard/data
+RUN apk add --no-cache su-exec \
+    && addgroup -S -g 10001 baize \
+    && adduser -S -D -H -u 10001 -G baize baize \
+    && mkdir -p /dashboard/data \
+    && chown baize:baize /dashboard/data
 COPY --from=backend-builder /out/baize /opt/baize/dashboard/bin/baize
 COPY dashboard/frontend /opt/baize/dashboard/frontend
 COPY dashboard/config.yml.example /opt/baize/dashboard/config.yaml.example

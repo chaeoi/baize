@@ -27,7 +27,6 @@ func profileForModel(name string) (robotProfile, error) {
 		ReadTimeout:    Duration(profile.Motor.ReadTimeout.Value()),
 		ROSSetup:       append([]string(nil), profile.Motor.ROSSetup...),
 		ROSEnvironment: cloneEnvironment(profile.Motor.ROSEnvironment),
-		ROSUser:        profile.Motor.ROSUser,
 	}
 	bms := BMSConfig{
 		Enabled:        profile.BMS.Enabled,
@@ -36,7 +35,6 @@ func profileForModel(name string) (robotProfile, error) {
 		ReadTimeout:    Duration(profile.BMS.ReadTimeout.Value()),
 		ROSSetup:       append([]string(nil), profile.BMS.ROSSetup...),
 		ROSEnvironment: cloneEnvironment(profile.BMS.ROSEnvironment),
-		ROSUser:        profile.BMS.ROSUser,
 	}
 	return robotProfile{Motor: motor, BMS: bms}, nil
 }

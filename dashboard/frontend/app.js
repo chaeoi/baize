@@ -4,7 +4,6 @@ const state = {
   selected: null,
   authenticated: false,
   passwordChangeRequired: false,
-  adminUser: 'admin',
   stream: null,
   streamMode: '',
   reconnectTimer: null,
@@ -63,7 +62,6 @@ async function boot() {
     const session = await api('/api/v1/session');
     state.authenticated = Boolean(session.authenticated);
     state.passwordChangeRequired = Boolean(session.password_change_required);
-    state.adminUser = session.username || 'admin';
   } catch {
     state.authenticated = false;
   }
@@ -126,8 +124,6 @@ async function bootDashboard() {
     const session = await api('/api/v1/session');
     state.authenticated = Boolean(session.authenticated);
     state.passwordChangeRequired = Boolean(session.password_change_required);
-    state.adminUser = session.username || 'admin';
-    $('#username').value = state.adminUser;
   } catch (error) {
     $('#login-error').textContent = error.message;
   }
@@ -170,7 +166,7 @@ function enterDashboard() {
   state.view = 'settings';
   state.passwordChangeRequired = false;
   history.replaceState({}, '', '/dashboard');
-  $('#settings-session').textContent = state.adminUser;
+  $('#settings-session').textContent = '管理员';
   showApp();
   openStream('admin');
 }
@@ -203,7 +199,7 @@ async function login(event) {
   event.preventDefault();
   $('#login-error').textContent = '';
   try {
-    const session = await api('/api/v1/session', { method: 'POST', body: JSON.stringify({ username: $('#username').value, password: $('#password').value }) });
+    const session = await api('/api/v1/session', { method: 'POST', body: JSON.stringify({ password: $('#password').value }) });
     const password = $('#password').value;
     $('#password').value = '';
     state.authenticated = true;
@@ -927,7 +923,7 @@ function renderSettings() {
   $('#settings-identity-facts').innerHTML = facts([
     ['UUID', robot.uuid], ['型号', robot.model], ['主机名', robot.hostname], ['平台', `${robot.os}/${robot.arch}`], ['Agent 版本', robot.agent_version], ['batcan 版本', bmsVersion || '-'], ['最后上报', formatDate(robot.last_seen)]
   ]);
-  $('#settings-session').textContent = state.adminUser;
+  $('#settings-session').textContent = '管理员';
 }
 
 function selectAdminRobot(uuid) {

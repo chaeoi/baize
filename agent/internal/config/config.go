@@ -84,7 +84,6 @@ type MotorConfig struct {
 	ReadTimeout    Duration          `json:"read_timeout" yaml:"read_timeout"`
 	ROSSetup       []string          `json:"ros_setup" yaml:"ros_setup"`
 	ROSEnvironment map[string]string `json:"ros_environment" yaml:"ros_environment"`
-	ROSUser        string            `json:"ros_user" yaml:"ros_user"`
 }
 
 type BMSConfig struct {
@@ -94,7 +93,6 @@ type BMSConfig struct {
 	ReadTimeout    Duration          `json:"read_timeout" yaml:"read_timeout"`
 	ROSSetup       []string          `json:"ros_setup" yaml:"ros_setup"`
 	ROSEnvironment map[string]string `json:"ros_environment" yaml:"ros_environment"`
-	ROSUser        string            `json:"ros_user" yaml:"ros_user"`
 }
 
 type UpdateConfig struct {
@@ -163,12 +161,11 @@ func Default() Config {
 }
 
 var (
-	uuidPattern     = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
-	codePattern     = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-	topicPattern    = regexp.MustCompile(`^/[A-Za-z0-9_/]{1,255}$`)
-	messagePattern  = regexp.MustCompile(`^[A-Za-z0-9_]+/msg/[A-Za-z0-9_]+$`)
-	envNamePattern  = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
-	userNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	uuidPattern    = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+	codePattern    = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	topicPattern   = regexp.MustCompile(`^/[A-Za-z0-9_/]{1,255}$`)
+	messagePattern = regexp.MustCompile(`^[A-Za-z0-9_]+/msg/[A-Za-z0-9_]+$`)
+	envNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
 )
 
 func Build(agent AgentConfig) (Config, error) {
@@ -300,18 +297,12 @@ func (c *Config) Validate() error {
 		if err := validateROSEnvironment("motor", c.Motor.ROSEnvironment); err != nil {
 			return err
 		}
-		if err := validateROSUser("motor", c.Motor.ROSUser); err != nil {
-			return err
-		}
 		if !topicPattern.MatchString(c.Motor.Topic) || !messagePattern.MatchString(c.Motor.MessageType) {
 			return errors.New("motor topic or message_type is invalid")
 		}
 	}
 	if c.BMS.Enabled {
 		if err := validateROSEnvironment("bms", c.BMS.ROSEnvironment); err != nil {
-			return err
-		}
-		if err := validateROSUser("bms", c.BMS.ROSUser); err != nil {
 			return err
 		}
 		if !topicPattern.MatchString(c.BMS.ROSTopic) || !messagePattern.MatchString(c.BMS.ROSMessageType) {
@@ -333,13 +324,6 @@ func validateROSEnvironment(component string, environment map[string]string) err
 		if strings.ContainsAny(value, "\x00\n\r") {
 			return fmt.Errorf("%s.ros_environment[%s] contains an invalid control character", component, name)
 		}
-	}
-	return nil
-}
-
-func validateROSUser(component, user string) error {
-	if user != "" && !userNamePattern.MatchString(user) {
-		return fmt.Errorf("%s.ros_user is invalid", component)
 	}
 	return nil
 }

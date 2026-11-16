@@ -136,7 +136,13 @@ func RecoverUpdate(executable string) error {
 		return err
 	}
 	if err := os.Rename(executable+".previous", executable); err != nil {
-		return err
+		// Recovery may itself have been interrupted after restoring the binary.
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if _, statErr := os.Stat(executable); statErr != nil {
+			return fmt.Errorf("previous and current Agent are unavailable: %w", statErr)
+		}
 	}
 	if err := os.WriteFile(executable+".rejected", pending, 0o600); err != nil {
 		return err
@@ -158,8 +164,7 @@ func ConfirmUpdate() error {
 	return nil
 }
 
-// Supervise keeps a root-owned launcher available if an updated worker cannot start.
-// It runs as the same unprivileged account as the worker.
+// Supervise restores the previous binary if an updated worker cannot start.
 func Supervise(ctx context.Context, executable, configPath string) error {
 	for ctx.Err() == nil {
 		if err := RecoverUpdate(executable); err != nil {

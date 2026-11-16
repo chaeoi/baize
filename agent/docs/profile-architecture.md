@@ -21,5 +21,4 @@
 服务模型一致：监控系统读状态，不接管设备控制。
 
 新增型号时，只需在 `shared/robotmodel/models.yml` 增加一个 YAML 文档，并补充单元测试
-和实机只读验证；然后由 GitHub Actions 发布包含该型号的 Agent 和 Dashboard。运行旧版本的机器人会明确
-拒绝未知型号，而不会猜测或发送未知总线帧。
+和实机只读验证；然后由 GitHub Actions 发布包含该型号的 Agent 和 Dashboard。Agent 会明确拒绝未内置的型号，而不会猜测或发送未知总线帧。

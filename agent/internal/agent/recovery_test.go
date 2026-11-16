@@ -139,3 +139,23 @@ func (d testUpdateDownloader) Download(ctx context.Context, _ model.UpdateInfo, 
 	_, err = io.Copy(writer, response.Body)
 	return err
 }
+
+func TestRecoverInterruptedRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(path, []byte("restored binary"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".pending", []byte("failed-release"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverUpdate(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + ".pending"); !os.IsNotExist(err) {
+		t.Fatalf("pending state left behind: %v", err)
+	}
+	data, err := os.ReadFile(path + ".rejected")
+	if err != nil || string(data) != "failed-release" {
+		t.Fatalf("failed build not remembered: %q %v", data, err)
+	}
+}

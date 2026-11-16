@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,12 +25,12 @@ const updateRepository = "chaeoi/baize"
 const defaultMirror = "https://gitwarp.canghai.org"
 
 type githubClient struct {
-	http       *http.Client
-	mu         sync.Mutex
-	mirrorETag string
-	cachedURL  string
-	cachedHash string
-	cachedData []byte
+	http        *http.Client
+	mu          sync.Mutex
+	currentHash string
+	cachedURL   string
+	cachedHash  string
+	cachedData  []byte
 }
 
 func NewGitHubClient(httpClient *http.Client) *githubClient {
@@ -79,9 +78,6 @@ func (c *githubClient) checkGitHub(ctx context.Context, current, goos, arch stri
 		return nil, fmt.Errorf("GitHub returned an invalid latest release path")
 	}
 	version := parts[4]
-	if !isNewerVersion(version, current) {
-		return nil, nil
-	}
 	checksumURL := "https://github.com/" + updateRepository + "/releases/download/" + version + "/SHA256SUMS"
 	checksumRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumURL, nil)
 	if err != nil {
@@ -96,20 +92,20 @@ func (c *githubClient) checkGitHub(ctx context.Context, current, goos, arch stri
 	if checksumResponse.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub checksum download returned %s", checksumResponse.Status)
 	}
-	digest := ""
-	scanner := bufio.NewScanner(io.LimitReader(checksumResponse.Body, 64*1024))
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) >= 2 && strings.TrimPrefix(fields[1], "*") == assetName {
-			digest = fields[0]
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	checksumData, err := io.ReadAll(io.LimitReader(checksumResponse.Body, 64*1024))
+	if err != nil {
 		return nil, err
 	}
-	if len(digest) != 64 {
+	digest := checksumForAsset(checksumData, assetName)
+	if digest == "" {
 		return nil, fmt.Errorf("GitHub release %s has no SHA-256 checksum for %s", version, assetName)
+	}
+	currentHash, err := c.runningHash()
+	if err != nil {
+		return nil, err
+	}
+	if digest == currentHash {
+		return nil, nil
 	}
 	return &model.UpdateInfo{Version: version, OS: goos, Arch: arch, SHA256: digest, URL: "https://github.com/" + updateRepository + "/releases/download/" + version + "/" + assetName}, nil
 }
@@ -120,40 +116,32 @@ func (c *githubClient) checkMirror(ctx context.Context, current, goos, arch stri
 	if base == "" {
 		base = defaultMirror
 	}
-	assetURL := base + "/github.com/" + updateRepository + "/releases/latest/download/" + assetName + "?download=1"
-	request, err := http.NewRequestWithContext(ctx, http.MethodHead, assetURL, nil)
+	// Check the small manifest on every poll. ETags and date versions do not
+	// identify builds reliably when a release is rebuilt on the same day.
+	query := "?download=1&cachebust=" + fmt.Sprint(time.Now().UnixNano())
+	assetURL := base + "/github.com/" + updateRepository + "/releases/latest/download/" + assetName + query
+	checksumURL := base + "/github.com/" + updateRepository + "/releases/latest/download/SHA256SUMS" + query
+	checksumData, err := c.downloadBytes(ctx, checksumURL)
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("User-Agent", "baize-agent/"+current)
-	response, err := c.http.Do(request)
+	digest := checksumForAsset(checksumData, assetName)
+	if digest == "" {
+		return nil, fmt.Errorf("mirror release has no SHA-256 checksum for %s", assetName)
+	}
+	currentHash, err := c.runningHash()
 	if err != nil {
 		return nil, err
 	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("mirror release returned %s", response.Status)
-	}
-	etag := response.Header.Get("ETag")
-	c.mu.Lock()
-	unchanged := etag != "" && etag == c.mirrorETag
-	c.mu.Unlock()
-	if unchanged {
+	if digest == currentHash {
 		return nil, nil
 	}
-
 	data, err := c.downloadBytes(ctx, assetURL)
 	if err != nil {
 		return nil, err
 	}
 	hash := sha256.Sum256(data)
-	digest := hex.EncodeToString(hash[:])
-	checksumURL := base + "/github.com/" + updateRepository + "/releases/latest/download/SHA256SUMS?download=1"
-	checksumData, err := c.downloadBytes(ctx, checksumURL)
-	if err != nil {
-		return nil, err
-	}
-	if checksum := checksumForAsset(checksumData, assetName); checksum == "" || checksum != digest {
+	if hex.EncodeToString(hash[:]) != digest {
 		return nil, fmt.Errorf("mirror release checksum mismatch for %s", assetName)
 	}
 	if err := validateCandidate(data, goos, arch); err != nil {
@@ -164,14 +152,8 @@ func (c *githubClient) checkMirror(ctx context.Context, current, goos, arch stri
 		return nil, err
 	}
 	c.mu.Lock()
-	c.mirrorETag = etag
-	if version != "" && isNewerVersion(version, current) {
-		c.cachedURL, c.cachedHash, c.cachedData = assetURL, digest, data
-	}
+	c.cachedURL, c.cachedHash, c.cachedData = assetURL, digest, data
 	c.mu.Unlock()
-	if !isNewerVersion(version, current) {
-		return nil, nil
-	}
 	return &model.UpdateInfo{Version: version, OS: goos, Arch: arch, SHA256: digest, Size: int64(len(data)), URL: assetURL}, nil
 }
 
@@ -256,7 +238,9 @@ func checksumForAsset(data []byte, asset string) string {
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) >= 2 && strings.TrimPrefix(fields[1], "*") == asset && len(fields[0]) == 64 {
-			return fields[0]
+			if _, err := hex.DecodeString(fields[0]); err == nil {
+				return strings.ToLower(fields[0])
+			}
 		}
 	}
 	return ""
@@ -266,9 +250,6 @@ func (c *githubClient) Download(ctx context.Context, update model.UpdateInfo, wr
 	c.mu.Lock()
 	if c.cachedURL == update.URL && c.cachedHash == update.SHA256 && len(c.cachedData) > 0 {
 		data := append([]byte(nil), c.cachedData...)
-		// Force the next check to refresh the candidate after it is consumed.
-		// This permits a retry when handoff or process replacement fails.
-		c.mirrorETag = ""
 		c.cachedURL, c.cachedHash, c.cachedData = "", "", nil
 		c.mu.Unlock()
 		_, err := io.Copy(writer, bytes.NewReader(data))
@@ -310,12 +291,23 @@ func (c *githubClient) Download(ctx context.Context, update model.UpdateInfo, wr
 	return nil
 }
 
-func isNewerVersion(candidate, current string) bool {
-	return versionNumber(candidate) > versionNumber(current)
-}
-
-func versionNumber(value string) int64 {
-	value = strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(value), "v"), "V")
-	number, _ := strconv.ParseInt(value, 10, 64)
-	return number
+func (c *githubClient) runningHash() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.currentHash != "" {
+		return c.currentHash, nil
+	}
+	// /proc/self/exe still references this process's binary after an atomic
+	// replacement of the installed path.
+	file, err := os.Open("/proc/self/exe")
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	c.currentHash = hex.EncodeToString(hash.Sum(nil))
+	return c.currentHash, nil
 }

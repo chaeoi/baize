@@ -5,10 +5,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=baize-agent
+Group=baize-agent
 WorkingDirectory=/opt/baize/agent
 ExecStart=/opt/baize/agent/baize-agent supervise --config /opt/baize/agent/config.yml
 Restart=always
 RestartSec=3
+UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/opt/baize/agent/bin
+ReadOnlyPaths=/opt/baize/agent/config.yml /opt/baize/agent/ros2-udp.xml
+Environment=FASTRTPS_DEFAULT_PROFILES_FILE=/opt/baize/agent/ros2-udp.xml
 Environment=ROS_LOG_DIR=/var/log/baize-agent/ros
 LogsDirectory=baize-agent
 LogsDirectoryMode=0750

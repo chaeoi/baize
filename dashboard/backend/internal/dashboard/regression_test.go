@@ -70,7 +70,7 @@ func TestAdminStreamClosesWhenSessionRevoked(t *testing.T) {
 			}
 			s := NewServer(ServerConfig{AdminUser: "admin", JWTSecret: "secret"}, store)
 			login := httptest.NewRecorder()
-			s.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(`{"username":"admin","password":"Current@Password123"}`)))
+			s.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(`{"password":"Current@Password123"}`)))
 			cookie := login.Result().Cookies()[0]
 			httpServer := httptest.NewServer(s)
 			defer httpServer.Close()

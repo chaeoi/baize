@@ -72,13 +72,13 @@ jobs:
           cp "subscriber-dist/baize-ros2-subscriber-linux-${{ matrix.arch }}" \
             agent/internal/service/baize-ros2-subscriber
 
-      - name: 计算日期版本
+      - name: 计算提交版本
         id: version
         run: |
           set -euo pipefail
           agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/ros2_subscriber shared/model shared/rawstream shared/agentbinary shared/robotmodel .github/workflows/agent-release.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
-          echo "version=$(date -u -d "$commit_date" +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "version=$(date -u -d "$commit_date" +%Y%m%d)-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
       - name: 构建静态 Agent
         env:
@@ -169,24 +169,9 @@ jobs:
           set -euo pipefail
           agent_paths=(go.mod go.sum agent/cmd agent/internal agent/deploy agent/ros2_subscriber shared/model shared/rawstream shared/agentbinary shared/robotmodel .github/workflows/agent-release.yml)
           commit_date="$(git log -1 --format=%cI "$GITHUB_SHA" -- "${agent_paths[@]}")"
-          version="$(date -u -d "$commit_date" +%Y%m%d)"
+          version="$(date -u -d "$commit_date" +%Y%m%d)-$GITHUB_SHA"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           (cd dist && sha256sum baize-agent-linux-* baize-ros2-subscriber-linux-* > SHA256SUMS)
-
-      - name: 移动日期标签
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          ref="refs/tags/$VERSION"
-          if gh api --silent "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION" \
-              -f sha="$GITHUB_SHA" -F force=true >/dev/null
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="$ref" -f sha="$GITHUB_SHA" >/dev/null
-          fi
 
       - name: 发布 Agent Release
         env:
@@ -205,5 +190,5 @@ jobs:
             dist/SHA256SUMS \
             --target "$GITHUB_SHA" \
             --title "Baize Agent $VERSION" \
-            --notes "白泽 Agent 日期版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态 Agent、ROS2 C++ Subscriber 和 SHA256SUMS。配置示例保留在源码仓库中。" \
+            --notes "白泽 Agent 提交版本 $VERSION。\n\n包含 Linux AMD64/ARM64 静态 Agent、ROS2 C++ Subscriber 和 SHA256SUMS。配置示例保留在源码仓库中。" \
             --latest

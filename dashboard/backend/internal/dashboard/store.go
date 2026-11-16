@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -71,7 +70,6 @@ type MotorHistoryPoint struct {
 
 type Store struct {
 	mu           sync.RWMutex
-	dataDir      string
 	control      *sql.DB
 	tsdb         *telemetryTSDB
 	robots       map[string]RobotRecord
@@ -107,12 +105,8 @@ func NewStore(dataDir, historyDir string, options StoreOptions) (*Store, error) 
 		_ = control.Close()
 		return nil, fmt.Errorf("open telemetry tsdb: %w", err)
 	}
-	store := &Store{dataDir: dataDir, control: control, tsdb: tsdb, robots: make(map[string]RobotRecord), historyEvery: options.HistorySampleInterval, lastHistory: make(map[string]time.Time)}
-	if err := store.migrateSchema(); err != nil {
-		store.Close()
-		return nil, err
-	}
-	if err := store.importLegacyState(); err != nil {
+	store := &Store{control: control, tsdb: tsdb, robots: make(map[string]RobotRecord), historyEvery: options.HistorySampleInterval, lastHistory: make(map[string]time.Time)}
+	if err := store.initializeSchema(); err != nil {
 		store.Close()
 		return nil, err
 	}
@@ -143,7 +137,7 @@ func openSQLite(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func (s *Store) migrateSchema() error {
+func (s *Store) initializeSchema() error {
 	controlSchema := `
 CREATE TABLE IF NOT EXISTS robots (
   uuid TEXT PRIMARY KEY,
@@ -171,54 +165,9 @@ CREATE TABLE IF NOT EXISTS control_meta (
   value TEXT NOT NULL
 );`
 	if _, err := s.control.Exec(controlSchema); err != nil {
-		return fmt.Errorf("migrate control database: %w", err)
+		return fmt.Errorf("initialize control database: %w", err)
 	}
 	return nil
-}
-
-type legacyState struct {
-	Remarks map[string]string `json:"remarks"`
-}
-
-func (s *Store) importLegacyState() error {
-	var imported string
-	if err := s.control.QueryRow(`SELECT value FROM control_meta WHERE key = 'legacy_state_imported'`).Scan(&imported); err == nil {
-		return nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	paths := []string{filepath.Join(s.dataDir, "state.json"), filepath.Join(filepath.Dir(s.dataDir), "state.json")}
-	var data []byte
-	for _, path := range paths {
-		loaded, err := os.ReadFile(path)
-		if err == nil {
-			data = loaded
-			break
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	legacy := legacyState{}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &legacy); err != nil {
-			return fmt.Errorf("read legacy dashboard state: %w", err)
-		}
-	}
-	tx, err := s.control.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for uuid, remark := range legacy.Remarks {
-		if _, err := tx.Exec(`INSERT INTO robot_settings(uuid, remark) VALUES(?, ?) ON CONFLICT(uuid) DO UPDATE SET remark=excluded.remark`, uuid, remark); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.Exec(`INSERT INTO control_meta(key, value) VALUES('legacy_state_imported', '1')`); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func (s *Store) ensureAdmin(username, bootstrapPassword string, forceChange bool) error {
@@ -238,9 +187,7 @@ func (s *Store) ensureAdmin(username, bootstrapPassword string, forceChange bool
 	return err
 }
 
-// Secret returns a persistent control-plane secret. Secrets are kept in the
-// control database so copying that database is sufficient to migrate the
-// Dashboard identity; the disposable history database is never involved.
+// Secret returns a persistent secret from the control database.
 func (s *Store) Secret(key string, size int) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

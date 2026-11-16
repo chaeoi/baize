@@ -2,9 +2,8 @@
 
 白泽由机器人端 Agent 和管理 Dashboard 组成。Dashboard 的控制数据保存在独立的
 SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌入式 VictoriaMetrics TSDB
-目录 `/dashboard/data/history/host` 与 `/dashboard/data/history/motor`，不需要额外数据库容器。迁移时只复制
-`control` 即可保留机器人身份、备注、管理员账号和 Dashboard JWT 密钥；历史目录可按
-保留策略丢弃。旧版 `history.db` 不再读取或迁移。
+目录 `/dashboard/data/history/host` 与 `/dashboard/data/history/motor`，不需要额外数据库容器。
+`control` 保存机器人身份、备注、管理密码和 Dashboard JWT 密钥；历史目录可按保留策略丢弃。
 
 主机、电池、GPU 和电机摘要按 `history_sample_interval`（默认 2 秒，0.5 Hz）写入 `host`，
 默认保留 90 天；500 Hz 电机原始位置、速度和转矩写入独立的 `motor` 时间序列，默认保留
@@ -21,8 +20,9 @@ SQLite 数据库 `/dashboard/data/control/control.db`；监控历史保存在嵌
 
 Dashboard 镜像自带配置样例。首次启动时会在数据卷中自动生成
 `/dashboard/data/config.yaml`（已有文件会直接复用），并在
-`/dashboard/data/control/control.db` 中保存 JWT 密钥。唯一管理员账号固定为
-`admin`，首次登录使用初始密码 `123456`，登录后强制修改。生产配置应由 root 保存为 `0600`。
+`/dashboard/data/control/control.db` 中保存 JWT 密钥。管理登录只需密码，首次使用初始密码 `123456`，登录后强制修改。
+新密码至少 12 个字符，UTF-8 编码不超过 72 字节。容器入口只在启动时调整数据卷权限，
+随后以 UID/GID `10001:10001` 运行 Dashboard；配置文件由该用户保存为 `0600`。
 
 `dashboard.agent_token` 可直接填写 Agent 使用的 Bearer 密钥，至少 12 个字符；留空时
 Dashboard 会首次启动生成随机密钥并写回 `/dashboard/data/config.yaml`。Agent 密钥只有这一个
@@ -119,14 +119,14 @@ MCAP 正常封存后删除对应日志。异常退出后，下次启动自动将
 Agent 序号按块持久化预留，不依赖系统时间，重启跳过未使用序号；自动更新先下载、
 校验候选版本，再停止采集并保存剩余批次后替换进程。
 
-本次更新移除了旧 JSON 遥测接口和 CSV 录制链路，需要同时更新 Agent 与 Dashboard。
-
 ## Agent
 
 GitHub Actions 构建 Linux AMD64/ARM64 静态 Agent；机器人只下载经 SHA-256 校验
 的 Release 二进制。Agent 自带服务安装器，`service install` 会把当前二进制安装到
-`/opt/baize/agent/baize-agent`，创建以 root 运行的 systemd 单元，并生成仅 root 可读的
-`/opt/baize/agent/config.yml`。topic、电机清单、电池 ROS2 消息格式
+`/opt/baize/agent/baize-agent`，创建以专用系统用户 `baize-agent` 运行的 systemd 单元，
+不授予 Linux capabilities。`/opt/baize/agent/config.yml` 为 `root:baize-agent`、权限 `0640`，
+服务内只读。实际运行文件为 `bin/baize-agent`，只有 `bin/` 对服务用户可写，
+以支持原地更新；管理入口和配置所在目录由 root 持有。topic、电机清单、电池 ROS2 消息格式
 均由二进制内置 profile 决定，配置文件不能覆盖。
 
 现场配置用顶层 `model` 选择一个型号，型号文件不会复制到机器人：
@@ -173,7 +173,10 @@ curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/ma
 
 下载脚本只负责选择架构、校验 Release，然后把安装参数传给
 `baize-agent service install`。安装后的 Agent 按 `update.check_interval` 定时直接检查
-GitHub Release（默认经 GitWarp 加速），并在校验通过后自动升级，不依赖 Dashboard 在线或参与发布。
+GitHub 最新成功发布的 Release（默认经 GitWarp 加速），先读取 `SHA256SUMS`，
+与正在运行的二进制比较，仅有变化时下载并校验候选程序，再自动升级。版本和发布标签为
+`日期-完整提交SHA`，同一天的提交可以分别追溯；不再移动同一个日期标签。
+尚未构建成功并发布的源码提交不会安装到机器人上，更新不依赖 Dashboard 在线或参与发布。
 未传 `--uuid` 时 Agent 生成永久 UUID；也支持 `--force-config`。安装参数只用于写入 `config.yml`，不会成为第二个
 运行时配置来源；已有有效配置默认保留，传入某个参数时只更新对应字段。`--force-config`
 用于从默认模板重新生成配置。可用以下命令查看状态或卸载服务；卸载会删除二进制、配置、
@@ -187,7 +190,7 @@ sudo /opt/baize/agent/baize-agent service uninstall
 
 支持的模型、ROS2 topic、关节标签与电机元数据均编入 Agent；不支持的型号会在
 安装校验阶段失败。Agent Release 内置按架构编译的 C++ `rclcpp` 订阅器，从匿名内存
-启动并长期监听 topic，安装目录只保留 Agent 二进制和配置，不依赖 Python、`rclpy`
+启动并长期监听 topic，安装目录另有自动生成的 `ros2-udp.xml`，不依赖 Python、`rclpy`
 或 `ros2 topic echo`：
 
 - 电机：`/motor/q2w_upper_motor_joint_state`，`sensor_msgs/msg/JointState`
@@ -195,6 +198,18 @@ sudo /opt/baize/agent/baize-agent service uninstall
 
 电池 topic 由独立 BMS 服务发布，仓库地址：
 `https://github.com/chaeoi/batcan`
+
+## 运行权限
+
+安装、修改配置和卸载使用 sudo，长期运行的 Agent、Dashboard 和 batcan 均使用普通用户。
+Agent 安装时将专用用户加入本机已有的 `video`、`render` 组，以读取 GPU 指标。
+batcan 需要配置 CAN 接口和切换波特率，单独通过 systemd 获得 `CAP_NET_ADMIN`，
+不需要把整个 ROS2 节点设为 root。CAN 接口应为 BMS 专用接口，自动探测会调整其波特率。
+
+两个服务安装器都会生成 Fast DDS UDP 配置并通过 `FASTRTPS_DEFAULT_PROFILES_FILE` 加载，
+避免与其他账户启动的 ROS2 节点共享内存时遇到权限冲突；topic、消息类型与采样率不变。
+
+自动更新只替换工作进程，管理入口、配置和 systemd 单元由安装器维护。
 
 ## 本地联调
 

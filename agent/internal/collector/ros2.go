@@ -3,6 +3,7 @@ package collector
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -10,9 +11,8 @@ import (
 )
 
 var rosEnvironmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
-var rosUserNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
-func rosSubscriberCommand(setup []string, environment map[string]string, user, topic, messageType string, readTimeout time.Duration) (string, error) {
+func rosSubscriberCommand(setup []string, environment map[string]string, topic, messageType string, readTimeout time.Duration) (string, error) {
 	if topic == "" || messageType == "" {
 		return "", fmt.Errorf("ROS2 subscriber topic and message type are required")
 	}
@@ -23,10 +23,10 @@ func rosSubscriberCommand(setup []string, environment map[string]string, user, t
 	arguments := shellQuote(binary) +
 		" --topic " + shellQuote(topic) + " --message-type " + shellQuote(messageType) +
 		" --read-timeout " + shellQuote(readTimeout.String())
-	return rosCommand(setup, environment, user, arguments)
+	return rosCommand(setup, environment, arguments)
 }
 
-func rosCommand(setupFiles []string, environment map[string]string, user, finalCommand string) (string, error) {
+func rosCommand(setupFiles []string, environment map[string]string, finalCommand string) (string, error) {
 	parts := make([]string, 0, len(setupFiles)+len(environment)+1)
 	for _, path := range setupFiles {
 		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "\x00\n\r") {
@@ -46,21 +46,14 @@ func rosCommand(setupFiles []string, environment map[string]string, user, finalC
 		}
 		parts = append(parts, "export "+name+"="+shellQuote(value))
 	}
+	if profile := os.Getenv("FASTRTPS_DEFAULT_PROFILES_FILE"); filepath.Base(profile) == "ros2-udp.xml" {
+		// Humble adds SHM back when ROS_LOCALHOST_ONLY=1, even with an XML
+		// transport override. This profile restricts UDP to loopback itself.
+		parts = append(parts, "export FASTRTPS_DEFAULT_PROFILES_FILE="+shellQuote(profile), "export ROS_LOCALHOST_ONLY='0'")
+	}
 	parts = append(parts, "exec "+finalCommand)
 	command := strings.Join(parts, " && ")
-	return wrapROSCommand(command, user, os.Geteuid())
-}
-
-func wrapROSCommand(command, user string, euid int) (string, error) {
-	if user == "" || euid != 0 {
-		return command, nil
-	}
-	if !rosUserNamePattern.MatchString(user) {
-		return "", fmt.Errorf("invalid ROS user %q", user)
-	}
-	// setpriv execs the lowered-privilege shell in place. This keeps the ROS
-	// client in CommandContext's process tree, so a read timeout kills it too.
-	return "exec /usr/bin/setpriv --reset-env --reuid=" + shellQuote(user) + " --regid=" + shellQuote(user) + " --init-groups -- /bin/bash -lc " + shellQuote(command), nil
+	return command, nil
 }
 
 func shellQuote(value string) string {
