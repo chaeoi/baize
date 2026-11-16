@@ -1,31 +1,110 @@
-name: 构建并发布 Agent
+name: 自动发布 Baize
 
 on:
   push:
-    tags: ['[0-9][0-9][0-9][0-9].[0-9]*.[0-9]*']
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: agent-release-${{ github.ref }}
+  group: baize-release
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
 
-env:
-  VERSION: ${{ github.ref_name }}
-
 jobs:
+  version:
+    name: 自动编号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.number.outputs.version }}
+      released: ${{ steps.number.outputs.released }}
+      latest: ${{ steps.number.outputs.latest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: 计算版本并创建标签
+        id: number
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          python3 - <<'PYCODE'
+          import datetime
+          import json
+          import os
+          import re
+          import subprocess
+
+
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+
+          def month(date):
+              value = datetime.datetime.fromisoformat(date).astimezone(datetime.timezone.utc)
+              return f"{value.year}.{value.month}"
+
+
+          def release(path):
+              result = subprocess.run(["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/releases/{path}"], text=True, capture_output=True)
+              if result.returncode:
+                  if "HTTP 404" in result.stderr:
+                      return None
+                  raise RuntimeError(result.stderr)
+              return json.loads(result.stdout)
+
+
+          head = os.environ["GITHUB_SHA"]
+          history = [line.split() for line in git("log", "--first-parent", "--format=%H %cI", head).splitlines()]
+          prefix = month(history[0][1])
+          pattern = re.compile(re.escape(prefix) + r"\.([1-9][0-9]*)")
+          tags = {}
+          for line in git("for-each-ref", "--format=%(refname:strip=2) %(objectname) %(*objectname)", "refs/tags").splitlines():
+              name, target, *peeled = line.split()
+              match = pattern.fullmatch(name)
+              if match:
+                  commit = peeled[0] if peeled else target
+                  tags[commit] = max(tags.get(commit, 0), int(match[1]))
+          sequence = 0
+          for commit, date in history:
+              if commit in tags:
+                  sequence += tags[commit]
+                  break
+              sequence += month(date) == prefix
+          if not 0 < sequence <= 4294967295:
+              raise RuntimeError("release sequence is out of range")
+          version = f"{prefix}.{sequence}"
+          reference = subprocess.run(["git", "rev-parse", "--verify", f"refs/tags/{version}^{{commit}}"], text=True, capture_output=True)
+          if reference.returncode == 0:
+              if reference.stdout.strip() != head:
+                  raise RuntimeError(f"release tag {version} already belongs to another commit")
+          else:
+              subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+              subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
+              subject = git("show", "-s", "--format=%s", head)
+              subprocess.run(["git", "tag", "-a", "--cleanup=verbatim", version, head, "-m", f"## 更新内容\n\n- {subject}\n"], check=True)
+              subprocess.run(["git", "push", "origin", f"refs/tags/{version}"], check=True)
+          existing = release(f"tags/{version}")
+          if existing and existing["draft"]:
+              subprocess.run(["gh", "release", "delete", version, "--repo", os.environ["GITHUB_REPOSITORY"], "--yes"], check=True)
+              existing = None
+          latest = release("latest")
+          promote = not latest or tuple(map(int, version.split("."))) > tuple(map(int, latest["tag_name"].split(".")))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\nreleased={str(bool(existing)).lower()}\nlatest={str(promote).lower()}\n")
+          print(f"Release version: {version}")
+          PYCODE
+
   go-test:
     name: 测试 Go Agent
+    needs: [version]
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
         uses: actions/checkout@v6
-      - name: 校验发布版本
-        run: |
-          test "$GITHUB_REF_TYPE" = tag
-          [[ "$VERSION" =~ ^[2-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$ ]]
       - name: 设置 Go
         uses: actions/setup-go@v7
         with:
@@ -38,7 +117,10 @@ jobs:
 
   build-agent:
     name: 构建 Linux Agent (${{ matrix.arch }})
-    needs: [go-test]
+    needs: [version, go-test]
+    if: needs.version.outputs.released != 'true'
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     runs-on: ${{ matrix.runner }}
     container: ros:humble-ros-base-jammy
     strategy:
@@ -96,9 +178,21 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  dashboard:
+    name: 发布 Dashboard
+    needs: [version, go-test]
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      latest: ${{ needs.version.outputs.latest == 'true' }}
+    secrets: inherit
+
   release:
     name: 发布 GitHub Release
-    needs: [build-agent]
+    needs: [version, build-agent, dashboard]
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PUBLISH_LATEST: ${{ needs.version.outputs.latest }}
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
@@ -158,4 +252,4 @@ jobs:
             --verify-tag \
             --title "Baize $VERSION" \
             --notes-file "$notes" \
-            --latest
+            --latest="$PUBLISH_LATEST"
