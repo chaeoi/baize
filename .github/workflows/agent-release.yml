@@ -113,10 +113,9 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: 生成发布元数据
+      - name: 生成校验和
         run: |
           set -euo pipefail
-          printf '%s\n' "$VERSION" > dist/VERSION
           (cd dist && sha256sum baize-agent-linux-* > SHA256SUMS)
 
       - name: 发布 Agent Release
@@ -156,7 +155,6 @@ jobs:
             dist/baize-agent-linux-amd64 \
             dist/baize-agent-linux-arm64 \
             dist/SHA256SUMS \
-            dist/VERSION \
             --verify-tag \
             --title "Baize $VERSION" \
             --notes-file "$notes" \

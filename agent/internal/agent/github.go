@@ -33,40 +33,59 @@ func (c *githubClient) Check(ctx context.Context, current, goos, arch string) (*
 	if goos != runtime.GOOS || arch != runtime.GOARCH {
 		return nil, fmt.Errorf("unsupported update platform %s/%s", goos, arch)
 	}
-	update, mirrorErr := c.checkMirror(ctx, current, goos, arch)
+	version, err := c.latestVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
+	newer, err := newerVersion(version, current)
+	if err != nil || !newer {
+		return nil, err
+	}
+	base := strings.TrimRight(os.Getenv("BAIZE_MIRROR"), "/")
+	if base == "" {
+		base = defaultMirror
+	}
+	update, mirrorErr := c.checkRelease(ctx, base+"/github.com/"+updateRepository+"/releases", version, goos, arch)
 	if mirrorErr == nil {
 		return update, nil
 	}
-	update, err := c.checkGitHub(ctx, current, goos, arch)
+	update, err = c.checkRelease(ctx, "https://github.com/"+updateRepository+"/releases", version, goos, arch)
 	if err != nil {
 		return nil, errors.Join(mirrorErr, err)
 	}
 	return update, nil
 }
 
-func (c *githubClient) checkMirror(ctx context.Context, current, goos, arch string) (*model.UpdateInfo, error) {
-	base := strings.TrimRight(os.Getenv("BAIZE_MIRROR"), "/")
-	if base == "" {
-		base = defaultMirror
-	}
-	return c.checkRelease(ctx, base+"/github.com/"+updateRepository+"/releases", current, goos, arch)
-}
-
-func (c *githubClient) checkGitHub(ctx context.Context, current, goos, arch string) (*model.UpdateInfo, error) {
-	return c.checkRelease(ctx, "https://github.com/"+updateRepository+"/releases", current, goos, arch)
-}
-
-func (c *githubClient) checkRelease(ctx context.Context, base, current, goos, arch string) (*model.UpdateInfo, error) {
-	query := "?cachebust=" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	data, err := c.downloadBytes(ctx, base+"/latest/download/VERSION"+query, 128)
+func (c *githubClient) latestVersion(ctx context.Context) (string, error) {
+	address := "https://github.com/" + updateRepository + "/releases/latest?cachebust=" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, address, nil)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	version := strings.TrimSpace(string(data))
-	newer, err := newerVersion(version, current)
-	if err != nil || !newer {
-		return nil, err
+	request.Header.Set("User-Agent", "baize-agent/update")
+	client := *c.http
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
 	}
+	defer response.Body.Close()
+	if response.StatusCode < 300 || response.StatusCode >= 400 {
+		return "", fmt.Errorf("latest release lookup returned %s", response.Status)
+	}
+	location, err := response.Location()
+	if err != nil {
+		return "", err
+	}
+	prefix := "/" + updateRepository + "/releases/tag/"
+	if location.Scheme != "https" || location.Host != "github.com" || !strings.HasPrefix(location.Path, prefix) {
+		return "", fmt.Errorf("GitHub returned an invalid release location")
+	}
+	return strings.TrimPrefix(location.Path, prefix), nil
+}
+
+func (c *githubClient) checkRelease(ctx context.Context, base, version, goos, arch string) (*model.UpdateInfo, error) {
+	query := "?cachebust=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	// Pin all remaining downloads to the version we just checked.
 	release := base + "/download/" + version
 	asset := "baize-agent-" + goos + "-" + arch

@@ -55,9 +55,6 @@ func TestMirrorOnlyDownloadsNewerVersionAndPinsAssets(t *testing.T) {
 	const prefix = "/github.com/chaeoi/baize/releases/"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case prefix + "latest/download/VERSION":
-			versions++
-			fmt.Fprintln(w, "2026.11.2")
 		case prefix + "download/2026.11.2/SHA256SUMS":
 			manifests++
 			fmt.Fprintf(w, "%s  %s\n", digest, asset)
@@ -71,7 +68,16 @@ func TestMirrorOnlyDownloadsNewerVersionAndPinsAssets(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("BAIZE_MIRROR", server.URL)
-	client := NewGitHubClient(server.Client())
+	httpClient := server.Client()
+	original := httpClient.Transport
+	httpClient.Transport = releaseTransport(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodHead && r.URL.Host == "github.com" && r.URL.Path == "/chaeoi/baize/releases/latest" {
+			versions++
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"https://github.com/chaeoi/baize/releases/tag/2026.11.2"}}, Body: http.NoBody, Request: r}, nil
+		}
+		return original.RoundTrip(r)
+	})
+	client := NewGitHubClient(httpClient)
 	for _, current := range []string{"2026.11.2", "2026.11.10"} {
 		update, err := client.Check(t.Context(), current, runtime.GOOS, runtime.GOARCH)
 		if err != nil || update != nil || downloads != 0 || manifests != 0 {
@@ -98,16 +104,41 @@ func TestReleaseCheckFallsBackToGitHub(t *testing.T) {
 	t.Setenv("BAIZE_MIRROR", "https://mirror.example")
 	asset := "baize-agent-linux-" + runtime.GOARCH
 	client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
-		status, body := http.StatusOK, "2026.11.2\n"
-		if r.URL.Host == "mirror.example" {
+		status, body := http.StatusOK, ""
+		headers := make(http.Header)
+		if r.Method == http.MethodHead {
+			status = http.StatusFound
+			headers.Set("Location", "https://github.com/chaeoi/baize/releases/tag/2026.11.2")
+		} else if r.URL.Host == "mirror.example" {
 			status = http.StatusBadGateway
 		} else if strings.HasSuffix(r.URL.Path, "/SHA256SUMS") {
 			body = strings.Repeat("a", 64) + "  " + asset + "\n"
 		}
-		return &http.Response{StatusCode: status, Status: http.StatusText(status), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+		return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: headers, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})})
 	update, err := client.Check(t.Context(), "2026.11.1", runtime.GOOS, runtime.GOARCH)
 	if err != nil || update == nil || update.URL != "https://github.com/chaeoi/baize/releases/download/2026.11.2/"+asset {
 		t.Fatalf("fallback failed: %+v %v", update, err)
+	}
+}
+
+func TestLatestReleaseRejectsInvalidRedirect(t *testing.T) {
+	for _, location := range []string{
+		"", "https://example.com/chaeoi/baize/releases/tag/2026.11.2",
+		"https://github.com/other/baize/releases/tag/2026.11.2",
+		"https://github.com/chaeoi/baize/releases/tag/invalid",
+		"https://github.com/chaeoi/baize/releases/tag/2026.11.2/extra",
+	} {
+		t.Run(location, func(t *testing.T) {
+			client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodHead {
+					t.Fatal("invalid version caused an asset download")
+				}
+				return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {location}}, Body: http.NoBody, Request: r}, nil
+			})})
+			if _, err := client.Check(t.Context(), "2026.11.1", runtime.GOOS, runtime.GOARCH); err == nil {
+				t.Fatal("invalid release accepted")
+			}
+		})
 	}
 }
