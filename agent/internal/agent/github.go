@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -184,11 +185,53 @@ func (c *githubClient) Download(ctx context.Context, update model.UpdateInfo, wr
 			return fmt.Errorf("update source returned an invalid update URL")
 		}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, update.URL, nil)
+	addresses := []string{update.URL}
+	if parsed.Host != "github.com" {
+		addresses = append(addresses, "https://github.com/"+updateRepository+"/releases/download/"+update.Version+"/baize-agent-"+update.OS+"-"+update.Arch)
+	}
+	// Stage each source separately so a partial mirror response cannot be mixed
+	// with the fallback download in the caller's file or checksum stream.
+	staging, err := os.CreateTemp("", "baize-download-*")
 	if err != nil {
 		return err
 	}
-	request.Header.Set("User-Agent", "baize-agent/"+update.Version)
+	defer os.Remove(staging.Name())
+	defer staging.Close()
+	var failures []error
+	for _, address := range addresses {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := staging.Truncate(0); err != nil {
+			return err
+		}
+		if _, err := staging.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		hash := sha256.New()
+		err := c.downloadAsset(ctx, address, update.Version, io.MultiWriter(staging, hash))
+		if err == nil && hex.EncodeToString(hash.Sum(nil)) != update.SHA256 {
+			err = fmt.Errorf("downloaded Agent SHA-256 does not match release")
+		}
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if _, err := staging.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		_, err = io.Copy(writer, staging)
+		return err
+	}
+	return errors.Join(failures...)
+}
+
+func (c *githubClient) downloadAsset(ctx context.Context, address, version string, writer io.Writer) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("User-Agent", "baize-agent/"+version)
 	response, err := c.http.Do(request)
 	if err != nil {
 		return err

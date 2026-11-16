@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,8 @@ import (
 type UpdateDownloader interface {
 	Download(context.Context, model.UpdateInfo, io.Writer) error
 }
+
+var ErrUpdateSuperseded = errors.New("an equal or newer Agent version is already installed")
 
 func ApplyUpdate(ctx context.Context, client UpdateDownloader, update model.UpdateInfo, executable, configPath string, beforeReplace func() error) error {
 	if update.OS != runtime.GOOS || update.Arch != runtime.GOARCH {
@@ -46,6 +49,20 @@ func applyUpdate(ctx context.Context, client UpdateDownloader, update model.Upda
 		return fmt.Errorf("another update is in progress: %w", err)
 	}
 	defer syscall.Flock(fd, syscall.LOCK_UN)
+	versionCtx, cancelVersion := context.WithTimeout(ctx, 15*time.Second)
+	output, err := exec.CommandContext(versionCtx, executable, "--version").Output()
+	cancelVersion()
+	if err != nil {
+		return fmt.Errorf("read installed Agent version: %w", err)
+	}
+	current := strings.TrimSpace(string(output))
+	newer, err := newerVersion(update.Version, current)
+	if err != nil {
+		return err
+	}
+	if !newer {
+		return fmt.Errorf("%w: installed %s, candidate %s", ErrUpdateSuperseded, current, update.Version)
+	}
 	info, err := os.Stat(executable)
 	if err != nil {
 		return err
@@ -82,7 +99,7 @@ func applyUpdate(ctx context.Context, client UpdateDownloader, update model.Upda
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(checkCtx, temporary.Name(), "--version").Output()
+	output, err = exec.CommandContext(checkCtx, temporary.Name(), "--version").Output()
 	if err != nil || strings.TrimSpace(string(output)) != update.Version {
 		return fmt.Errorf("downloaded Agent version does not match %s: %v", update.Version, err)
 	}
