@@ -38,61 +38,7 @@ jobs:
 
   build-agent:
     name: 构建 Linux Agent (${{ matrix.arch }})
-    needs: [go-test, build-subscriber]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        arch: [amd64, arm64]
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: 设置 Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: 下载对应架构的 ROS2 Subscriber
-        uses: actions/download-artifact@v7
-        with:
-          name: baize-subscriber-${{ matrix.arch }}
-          path: subscriber-dist
-
-      - name: 嵌入 ROS2 Subscriber
-        run: |
-          cp "subscriber-dist/baize-ros2-subscriber-linux-${{ matrix.arch }}" \
-            agent/internal/service/baize-ros2-subscriber
-
-      - name: 构建静态 Agent
-        env:
-          GOARCH: ${{ matrix.arch }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux go build \
-            -trimpath -buildvcs=false -tags netgo,osusergo \
-            -ldflags="-s -w -buildid= -X main.version=$VERSION" \
-            -o "dist/baize-agent-linux-$GOARCH" ./agent/cmd/baize-agent
-          if [ "$GOARCH" = "$(go env GOHOSTARCH)" ]; then
-            "dist/baize-agent-linux-$GOARCH" -version
-          else
-            file "dist/baize-agent-linux-$GOARCH"
-          fi
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v7
-        with:
-          name: baize-agent-${{ matrix.arch }}
-          path: dist/baize-agent-linux-${{ matrix.arch }}
-          if-no-files-found: error
-          retention-days: 7
-
-  build-subscriber:
-    name: 构建 ROS2 C++ Subscriber (${{ matrix.arch }})
+    needs: [go-test]
     runs-on: ${{ matrix.runner }}
     container: ros:humble-ros-base-jammy
     strategy:
@@ -106,29 +52,47 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v6
+
       - name: 安装构建依赖
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential cmake ros-humble-ament-cmake ros-humble-rclcpp \
             ros-humble-sensor-msgs ros-humble-diagnostic-msgs
-      - name: 构建 C++ Subscriber
+
+      - name: 设置 Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 构建静态 Agent
+        shell: bash
+        env:
+          GOARCH: ${{ matrix.arch }}
         run: |
-          # ROS setup scripts read optional shell variables, so avoid nounset;
-          # container jobs also default to POSIX sh without pipefail.
-          set -e
-          . /opt/ros/humble/setup.sh
-          cmake -S agent/ros2_subscriber -B build/baize-ros2-subscriber -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/baize-ros2-subscriber --parallel
+          set -eo pipefail
+          . /opt/ros/humble/setup.bash
+          cmake -S agent/ros2_subscriber -B "$RUNNER_TEMP/baize-ros2-subscriber" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/baize-ros2-subscriber" --parallel
+          subscriber="$RUNNER_TEMP/baize-ros2-subscriber/baize-ros2-subscriber"
+          ldd "$subscriber" | tee "$RUNNER_TEMP/baize-ros2-subscriber-ldd.txt"
+          if grep -q 'not found' "$RUNNER_TEMP/baize-ros2-subscriber-ldd.txt"; then
+            exit 1
+          fi
+          cp "$subscriber" agent/internal/service/baize-ros2-subscriber
           mkdir -p dist
-          cp build/baize-ros2-subscriber/baize-ros2-subscriber dist/baize-ros2-subscriber-linux-${{ matrix.arch }}
-          ldd dist/baize-ros2-subscriber-linux-${{ matrix.arch }} | tee dist/ldd-${{ matrix.arch }}.txt
-          ! grep -q 'not found' dist/ldd-${{ matrix.arch }}.txt
-      - name: 上传构建产物
+          CGO_ENABLED=0 GOOS=linux go build \
+            -trimpath -buildvcs=false -tags netgo,osusergo \
+            -ldflags="-s -w -buildid= -X main.version=$VERSION" \
+            -o "dist/baize-agent-linux-$GOARCH" ./agent/cmd/baize-agent
+          "dist/baize-agent-linux-$GOARCH" -version
+
+      - name: 上传 Agent
         uses: actions/upload-artifact@v7
         with:
-          name: baize-subscriber-${{ matrix.arch }}
-          path: dist/baize-ros2-subscriber-linux-${{ matrix.arch }}
+          name: baize-agent-${{ matrix.arch }}
+          path: dist/baize-agent-linux-${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 7
 
