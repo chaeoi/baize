@@ -1,8 +1,14 @@
 name: 发布 Docker 镜像
 
 on:
-  push:
-    tags: ['[0-9][0-9][0-9][0-9].[0-9]*.[0-9]*']
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      latest:
+        required: true
+        type: boolean
   pull_request:
     branches: [main]
     paths:
@@ -15,11 +21,6 @@ on:
       - shared/rawstream/**
       - shared/robotmodel/**
       - .github/workflows/docker-publish.yml
-  workflow_dispatch:
-
-concurrency:
-  group: docker-publish-${{ github.ref }}
-  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -38,17 +39,26 @@ jobs:
         id: image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          PUBLISH_LATEST: ${{ inputs.latest }}
         run: |
           set -euo pipefail
           version=dev
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
-            test "$GITHUB_REF_TYPE" = tag
-            version="$GITHUB_REF_NAME"
+            version="$RELEASE_VERSION"
             [[ "$version" =~ ^[2-9][0-9]{3}\.([1-9]|1[0-2])\.(0|[1-9][0-9]*)$ ]]
           fi
           image_name="${DOCKERHUB_USERNAME:-${GITHUB_REPOSITORY_OWNER,,}}/baize"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "image_name=$image_name" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "image_name=$image_name"
+            echo 'tags<<IMAGE_TAGS'
+            echo "$image_name:$version"
+            if [ "$PUBLISH_LATEST" = true ]; then
+              echo "$image_name:latest"
+            fi
+            echo IMAGE_TAGS
+          } >> "$GITHUB_OUTPUT"
 
       - name: 校验 Docker Hub 密钥
         if: github.event_name != 'pull_request'
@@ -75,16 +85,28 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: 检查已发布镜像
+        id: existing
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.image_name }}
+          RELEASE_VERSION: ${{ steps.image.outputs.version }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo 'found=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 构建镜像并发布
+        if: steps.existing.outputs.found != 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./dashboard/backend/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ steps.image.outputs.image_name }}:latest
-            ${{ steps.image.outputs.image_name }}:${{ steps.image.outputs.version }}
+          tags: ${{ steps.image.outputs.tags }}
           build-args: |
             VERSION=${{ steps.image.outputs.version }}
           cache-from: type=gha
