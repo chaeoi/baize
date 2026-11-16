@@ -1,5 +1,5 @@
 GO ?= go
-VERSION ?= $(shell date -u +%Y%m%d)
+VERSION ?= $(shell TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d)-$(shell git rev-parse HEAD)
 LDFLAGS = -s -w -buildid= -X main.version=$(VERSION)
 BUILD_FLAGS = -trimpath -buildvcs=false -tags netgo,osusergo -ldflags="$(LDFLAGS)"
 

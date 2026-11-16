@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"baize/shared/rawstream"
 	"baize/shared/robotmodel"
@@ -139,10 +140,9 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 		if authenticated {
 			passwordChangeRequired, _ = s.store.PasswordChangeRequired(s.config.AdminUser)
 		}
-		writeJSON(writer, http.StatusOK, map[string]any{"authenticated": authenticated, "username": s.config.AdminUser, "password_change_required": passwordChangeRequired})
+		writeJSON(writer, http.StatusOK, map[string]any{"authenticated": authenticated, "password_change_required": passwordChangeRequired})
 	case http.MethodPost:
 		var body struct {
-			Username string `json:"username"`
 			Password string `json:"password"`
 		}
 		if err := decodeJSON(writer, request, &body, 4096); err != nil {
@@ -152,12 +152,12 @@ func (s *Server) session(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusTooManyRequests, "too many login attempts; try again later")
 			return
 		}
-		valid, passwordChangeRequired, err := s.store.AuthenticateAdmin(body.Username, body.Password)
+		valid, passwordChangeRequired, err := s.store.AuthenticateAdmin(s.config.AdminUser, body.Password)
 		if err != nil {
 			writeError(writer, http.StatusInternalServerError, "authenticate administrator")
 			return
 		}
-		if !secureEqual(body.Username, s.config.AdminUser) || !valid {
+		if !valid {
 			s.recordLoginFailure(request)
 			time.Sleep(250 * time.Millisecond)
 			writeError(writer, http.StatusUnauthorized, "invalid password")
@@ -783,8 +783,8 @@ func secureEqual(left, right string) bool {
 }
 
 func validateAdminPassword(password string) error {
-	if len(password) < 12 || len(password) > 128 {
-		return errors.New("new password must contain between 12 and 128 characters")
+	if utf8.RuneCountInString(password) < 12 || len(password) > 72 {
+		return errors.New("new password must contain at least 12 characters and at most 72 UTF-8 bytes")
 	}
 	var upper, lower, digit, symbol bool
 	for _, character := range password {

@@ -49,7 +49,6 @@ type MotorConfig struct {
 	MessageType    string                 `yaml:"message_type"`
 	ROSSetup       []string               `yaml:"ros_setup"`
 	ROSEnvironment map[string]string      `yaml:"ros_environment"`
-	ROSUser        string                 `yaml:"ros_user"`
 	ReadTimeout    Duration               `yaml:"read_timeout"`
 	Joints         map[string]JointConfig `yaml:"joints"`
 }
@@ -70,7 +69,6 @@ type BMSConfig struct {
 	MessageType    string            `yaml:"message_type"`
 	ROSSetup       []string          `yaml:"ros_setup"`
 	ROSEnvironment map[string]string `yaml:"ros_environment"`
-	ROSUser        string            `yaml:"ros_user"`
 	ReadTimeout    Duration          `yaml:"read_timeout"`
 }
 
@@ -79,7 +77,6 @@ var (
 	topicPattern     = regexp.MustCompile(`^/[A-Za-z0-9_/]{1,255}$`)
 	messagePattern   = regexp.MustCompile(`^[A-Za-z0-9_]+/msg/[A-Za-z0-9_]+$`)
 	envNamePattern   = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
-	userNamePattern  = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 	jointNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 )
 
@@ -177,7 +174,7 @@ func validateMotor(motor MotorConfig) error {
 	if motor.ReadTimeout.Value() <= 0 {
 		return errors.New("motor.read_timeout must be positive")
 	}
-	if err := validateROS(motor.ROSSetup, motor.ROSEnvironment, motor.ROSUser); err != nil {
+	if err := validateROS(motor.ROSSetup, motor.ROSEnvironment); err != nil {
 		return fmt.Errorf("motor: %w", err)
 	}
 	for name := range motor.Joints {
@@ -195,13 +192,13 @@ func validateBMS(bms BMSConfig) error {
 	if bms.ReadTimeout.Value() <= 0 {
 		return errors.New("bms.read_timeout must be positive")
 	}
-	if err := validateROS(bms.ROSSetup, bms.ROSEnvironment, bms.ROSUser); err != nil {
+	if err := validateROS(bms.ROSSetup, bms.ROSEnvironment); err != nil {
 		return fmt.Errorf("bms: %w", err)
 	}
 	return nil
 }
 
-func validateROS(setup []string, environment map[string]string, user string) error {
+func validateROS(setup []string, environment map[string]string) error {
 	for _, path := range setup {
 		if len(path) == 0 || path[0] != '/' {
 			return fmt.Errorf("ros_setup path %q must be absolute", path)
@@ -211,9 +208,6 @@ func validateROS(setup []string, environment map[string]string, user string) err
 		if !envNamePattern.MatchString(name) || containsControl(value) {
 			return fmt.Errorf("invalid ROS environment variable %q", name)
 		}
-	}
-	if user != "" && !userNamePattern.MatchString(user) {
-		return fmt.Errorf("invalid ros_user %q", user)
 	}
 	return nil
 }

@@ -16,7 +16,7 @@ func TestBuildUsesBuiltInRobotProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Motor.Topic != "/motor/q2w_upper_motor_joint_state" || cfg.Motor.ROSUser != "ubuntu" || cfg.Motor.ROSEnvironment["ROS_LOCALHOST_ONLY"] != "1" || cfg.Agent.RawBatchInterval.Value() != 2*time.Second || cfg.Agent.RawCacheBytes != 256<<20 {
+	if cfg.Motor.Topic != "/motor/q2w_upper_motor_joint_state" || cfg.Motor.ROSEnvironment["ROS_LOCALHOST_ONLY"] != "1" || cfg.Agent.RawBatchInterval.Value() != 2*time.Second || cfg.Agent.RawCacheBytes != 256<<20 {
 		t.Fatalf("unexpected built-in motor profile: %+v", cfg.Motor)
 	}
 	if cfg.BMS.ROSTopic != "/batcan/data" || cfg.BMS.ROSMessageType != "diagnostic_msgs/msg/DiagnosticArray" {

@@ -306,7 +306,7 @@ func TestHistorySampleLimitUsesSamplingRateAcrossTheRequestedRange(t *testing.T)
 func TestBootstrapLoginForcesPasswordChange(t *testing.T) {
 	store := newTestStore(t)
 	server := NewServer(ServerConfig{AgentToken: "agent-token-long-enough-for-tests", AdminUser: "admin", JWTSecret: "jwt-secret-long-enough-for-tests-123456"}, store)
-	login := httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(`{"username":"admin","password":"Baize@Admin1"}`))
+	login := httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(`{"password":"Baize@Admin1"}`))
 	loginResponse := httptest.NewRecorder()
 	server.ServeHTTP(loginResponse, login)
 	if loginResponse.Code != http.StatusOK || !strings.Contains(loginResponse.Body.String(), `"password_change_required":true`) {
@@ -334,5 +334,36 @@ func TestBootstrapLoginForcesPasswordChange(t *testing.T) {
 	server.ServeHTTP(adminResponse, admin)
 	if adminResponse.Code != http.StatusOK {
 		t.Fatalf("admin after password change status=%d body=%s", adminResponse.Code, adminResponse.Body.String())
+	}
+}
+
+func TestPasswordOnlyLoginRejectsWrongPassword(t *testing.T) {
+	store := newTestStore(t)
+	server := NewServer(ServerConfig{AdminUser: "admin", JWTSecret: "test-secret"}, store)
+	defer server.Close()
+	for _, body := range []string{`{}`, `{"password":"wrong-password"}`} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/session", strings.NewReader(body)))
+		if response.Code != http.StatusUnauthorized || len(response.Result().Cookies()) != 0 {
+			t.Fatalf("invalid password accepted: %d %s", response.Code, response.Body.String())
+		}
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/session", nil))
+	if strings.Contains(response.Body.String(), "username") {
+		t.Fatalf("session still exposes username: %s", response.Body.String())
+	}
+}
+
+func TestPasswordLengthMatchesBcryptLimit(t *testing.T) {
+	for _, password := range []string{"Aa1!" + strings.Repeat("x", 68), "Aa1!" + strings.Repeat("界", 22)} {
+		if err := validateAdminPassword(password); err != nil {
+			t.Fatalf("valid password (%d bytes): %v", len(password), err)
+		}
+	}
+	for _, password := range []string{"Aa1!" + strings.Repeat("x", 69), "Aa1!" + strings.Repeat("界", 23)} {
+		if err := validateAdminPassword(password); err == nil {
+			t.Fatalf("accepted %d-byte bcrypt password", len(password))
+		}
 	}
 }

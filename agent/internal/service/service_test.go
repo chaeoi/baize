@@ -193,21 +193,19 @@ func TestServiceUnitRunsInstalledBinaryWithConfig(t *testing.T) {
 	if !strings.Contains(unit, expected) || !strings.Contains(unit, "StateDirectory=baize-agent") {
 		t.Fatalf("unexpected service unit: %s", unit)
 	}
-	// The Agent runs as root over the single installed binary with no sandbox,
-	// so the install directory stays writable for in-place self-update.
-	for _, forbidden := range []string{"User=", "Group=", "ProtectSystem=", "ProtectHome=", "ReadOnlyPaths=", "ReadWritePaths=", "NoNewPrivileges=", "PrivateTmp="} {
-		if strings.Contains(unit, forbidden) {
-			t.Fatalf("service unit still hardens with %q: %s", forbidden, unit)
+	for _, required := range []string{"User=baize-agent", "Group=baize-agent", "NoNewPrivileges=true", "ReadWritePaths=/opt/baize/agent/bin", "ReadOnlyPaths=/opt/baize/agent/config.yml", "FASTRTPS_DEFAULT_PROFILES_FILE="} {
+		if !strings.Contains(unit, required) {
+			t.Fatalf("service unit missing %q: %s", required, unit)
 		}
 	}
 }
 
-func TestBinaryPathIsTheSingleInstalledAgent(t *testing.T) {
-	if BinaryPath() != "/opt/baize/agent/baize-agent" {
+func TestBinaryPathIsSeparateFromAdministrativeLauncher(t *testing.T) {
+	if BinaryPath() != "/opt/baize/agent/bin/baize-agent" {
 		t.Fatalf("unexpected binary path: %s", BinaryPath())
 	}
-	if filepath.Dir(BinaryPath()) != installDir {
-		t.Fatalf("binary must sit directly in the install directory: %s", BinaryPath())
+	if filepath.Dir(BinaryPath()) != filepath.Join(installDir, "bin") {
+		t.Fatalf("worker must sit in the service-owned runtime directory: %s", BinaryPath())
 	}
 }
 
@@ -216,7 +214,7 @@ func TestUninstallPathsCoverEverythingTheAgentCreates(t *testing.T) {
 	for _, path := range uninstallPaths() {
 		present[path] = true
 	}
-	for _, want := range []string{installDir, stateDir, privateStateDir, logDir, privateLogDir} {
+	for _, want := range []string{installDir, stateDir, logDir} {
 		if !present[want] {
 			t.Fatalf("uninstall leaves %s behind: %v", want, uninstallPaths())
 		}

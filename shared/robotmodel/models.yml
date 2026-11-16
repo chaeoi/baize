@@ -13,7 +13,6 @@ motor:
     - /opt/ros/humble/setup.bash
   ros_environment:
     ROS_LOCALHOST_ONLY: "1"
-  ros_user: ubuntu
   read_timeout: 5s
   joints:
     motor_id_01: {label: waist_1, brand: drive-unit, model: model-01, can_interface: can0, control_mode: PT}
@@ -58,5 +57,4 @@ bms:
     - /opt/ros/humble/setup.bash
   ros_environment:
     ROS_LOCALHOST_ONLY: "1"
-  ros_user: ubuntu
   read_timeout: 5s
