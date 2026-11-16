@@ -2,8 +2,10 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"baize/shared/model"
 )
@@ -196,5 +199,42 @@ func TestReleaseBinaryFallbackDoesNotMixSources(t *testing.T) {
 				t.Fatalf("sources were mixed or fallback failed: %q, %v", output.Bytes(), err)
 			}
 		})
+	}
+}
+
+func TestReleaseDownloadHasASeparateTransferTimeout(t *testing.T) {
+	payload := []byte("complete release executable")
+	hash := sha256.Sum256(payload)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(40 * time.Millisecond)
+		w.Write(payload)
+	}))
+	defer server.Close()
+	t.Setenv("BAIZE_MIRROR", server.URL)
+	httpClient := server.Client()
+	httpClient.Timeout = 10 * time.Millisecond
+	transport := httpClient.Transport
+	httpClient.Transport = releaseTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "github.com" {
+			return nil, fmt.Errorf("unexpected fallback from a healthy mirror")
+		}
+		return transport.RoundTrip(r)
+	})
+	client := NewGitHubClient(httpClient)
+	var output bytes.Buffer
+	err := client.Download(t.Context(), model.UpdateInfo{
+		Version: "2026.11.5", OS: "linux", Arch: runtime.GOARCH,
+		SHA256: hex.EncodeToString(hash[:]), URL: server.URL + "/binary",
+	}, &output)
+	if err != nil || !bytes.Equal(output.Bytes(), payload) {
+		t.Fatalf("telemetry timeout interrupted the release download: %v", err)
+	}
+	if httpClient.Timeout != 10*time.Millisecond {
+		t.Fatal("download changed the shared HTTP client timeout")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := client.Download(ctx, model.UpdateInfo{URL: server.URL + "/binary"}, io.Discard); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled update did not stop: %v", err)
 	}
 }
