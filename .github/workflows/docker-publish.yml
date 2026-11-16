@@ -6,9 +6,6 @@ on:
       version:
         required: true
         type: string
-      latest:
-        required: true
-        type: boolean
   pull_request:
     branches: [main]
     paths:
@@ -40,7 +37,6 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           RELEASE_VERSION: ${{ inputs.version }}
-          PUBLISH_LATEST: ${{ inputs.latest }}
         run: |
           set -euo pipefail
           version=dev
@@ -54,9 +50,6 @@ jobs:
             echo "image_name=$image_name"
             echo 'tags<<IMAGE_TAGS'
             echo "$image_name:$version"
-            if [ "$PUBLISH_LATEST" = true ]; then
-              echo "$image_name:latest"
-            fi
             echo IMAGE_TAGS
           } >> "$GITHUB_OUTPUT"
 
