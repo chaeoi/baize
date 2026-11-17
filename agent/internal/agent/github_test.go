@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -65,10 +66,10 @@ func TestMirrorOnlyDownloadsNewerVersionAndPinsAssets(t *testing.T) {
 	const prefix = "/github.com/chaeoi/baize/releases/"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case prefix + "download/2026.11.2/SHA256SUMS":
+		case prefix + "download/agent-2026.11.2/SHA256SUMS":
 			manifests++
 			fmt.Fprintf(w, "%s  %s\n", digest, asset)
-		case prefix + "download/2026.11.2/" + asset:
+		case prefix + "download/agent-2026.11.2/" + asset:
 			downloads++
 			w.Write(data)
 		default:
@@ -81,9 +82,9 @@ func TestMirrorOnlyDownloadsNewerVersionAndPinsAssets(t *testing.T) {
 	httpClient := server.Client()
 	original := httpClient.Transport
 	httpClient.Transport = releaseTransport(func(r *http.Request) (*http.Response, error) {
-		if r.Method == http.MethodHead && r.URL.Host == "github.com" && r.URL.Path == "/chaeoi/baize/releases/latest" {
+		if r.URL.Host == "api.github.com" && r.URL.Path == "/repos/chaeoi/baize/releases" {
 			versions++
-			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"https://github.com/chaeoi/baize/releases/tag/2026.11.2"}}, Body: http.NoBody, Request: r}, nil
+			return releaseListResponse(r, []map[string]any{{"tag_name": "agent-2026.11.2"}}), nil
 		}
 		return original.RoundTrip(r)
 	})
@@ -116,9 +117,8 @@ func TestReleaseCheckFallsBackToGitHub(t *testing.T) {
 	client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
 		status, body := http.StatusOK, ""
 		headers := make(http.Header)
-		if r.Method == http.MethodHead {
-			status = http.StatusFound
-			headers.Set("Location", "https://github.com/chaeoi/baize/releases/tag/2026.11.2")
+		if r.URL.Host == "api.github.com" {
+			return releaseListResponse(r, []map[string]any{{"tag_name": "agent-2026.11.2"}}), nil
 		} else if r.URL.Host == "mirror.example" {
 			status = http.StatusBadGateway
 		} else if strings.HasSuffix(r.URL.Path, "/SHA256SUMS") {
@@ -127,27 +127,106 @@ func TestReleaseCheckFallsBackToGitHub(t *testing.T) {
 		return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: headers, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})})
 	update, err := client.Check(t.Context(), "2026.11.1", runtime.GOOS, runtime.GOARCH)
-	if err != nil || update == nil || update.URL != "https://github.com/chaeoi/baize/releases/download/2026.11.2/"+asset {
+	if err != nil || update == nil || update.URL != "https://github.com/chaeoi/baize/releases/download/agent-2026.11.2/"+asset {
 		t.Fatalf("fallback failed: %+v %v", update, err)
 	}
 }
 
-func TestLatestReleaseRejectsInvalidRedirect(t *testing.T) {
-	for _, location := range []string{
-		"", "https://example.com/chaeoi/baize/releases/tag/2026.11.2",
-		"https://github.com/other/baize/releases/tag/2026.11.2",
-		"https://github.com/chaeoi/baize/releases/tag/invalid",
-		"https://github.com/chaeoi/baize/releases/tag/2026.11.2/extra",
-	} {
-		t.Run(location, func(t *testing.T) {
+func releaseListResponse(request *http.Request, releases []map[string]any) *http.Response {
+	data, _ := json.Marshal(releases)
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(data)), Request: request}
+}
+
+func TestLatestAgentReleaseFiltersAndPaginates(t *testing.T) {
+	first := make([]map[string]any, 100)
+	for i := range first {
+		first[i] = map[string]any{"tag_name": "dashboard-2029.1.1"}
+	}
+	first[0] = map[string]any{"tag_name": "agent-2026.11.99"}
+	first[1] = map[string]any{"tag_name": "agent-2026.11.9"}
+	first[2] = map[string]any{"tag_name": "2029.1.100"}
+	first[3] = map[string]any{"tag_name": "agent-2029.1.1", "draft": true}
+	first[4] = map[string]any{"tag_name": "agent-2029.1.2", "prerelease": true}
+	first[5] = map[string]any{"tag_name": "agent-2029.13.1"}
+	first[6] = map[string]any{"tag_name": "agent-2029.1.01"}
+	first[7] = map[string]any{"tag_name": "agent-2029.1.1/extra"}
+	first[8] = map[string]any{"tag_name": "agent-2029.1.0"}
+	first[9] = map[string]any{"tag_name": "agent-2029.1.4294967296"}
+	for _, nextYear := range []bool{false, true} {
+		t.Run(fmt.Sprint(nextYear), func(t *testing.T) {
+			second := []map[string]any{{"tag_name": "agent-2026.11.100"}, {"tag_name": "agent-2025.12.100"}}
+			want := "2026.11.100"
+			if nextYear {
+				second = append(second, map[string]any{"tag_name": "agent-2027.1.1"})
+				want = "2027.1.1"
+			}
+			requests := 0
 			client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
-				if r.Method != http.MethodHead {
-					t.Fatal("invalid version caused an asset download")
+				requests++
+				if r.Method != http.MethodGet || r.URL.Host != "api.github.com" || r.URL.Path != "/repos/chaeoi/baize/releases" || r.URL.Query().Get("per_page") != "100" {
+					t.Fatalf("unexpected lookup: %s %s", r.Method, r.URL)
 				}
-				return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {location}}, Body: http.NoBody, Request: r}, nil
+				switch r.URL.Query().Get("page") {
+				case "1":
+					return releaseListResponse(r, first), nil
+				case "2":
+					return releaseListResponse(r, second), nil
+				default:
+					t.Fatalf("unexpected page: %s", r.URL)
+					return nil, nil
+				}
 			})})
-			if _, err := client.Check(t.Context(), "2026.11.1", runtime.GOOS, runtime.GOARCH); err == nil {
-				t.Fatal("invalid release accepted")
+			got, err := client.latestVersion(t.Context())
+			if err != nil || got != want || requests != 2 {
+				t.Fatalf("version=%q requests=%d error=%v", got, requests, err)
+			}
+		})
+	}
+}
+
+func TestTransitionReleaseWaitsForFirstPrefixedRelease(t *testing.T) {
+	for _, releases := range [][]map[string]any{
+		{},
+		{{"tag_name": "2026.11.9"}},
+		{{"tag_name": "dashboard-2026.11.10"}, {"tag_name": "agent-2026.11.10", "draft": true}, {"tag_name": "agent-2026.11.11", "prerelease": true}},
+	} {
+		requests := 0
+		client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+			requests++
+			if r.URL.Host != "api.github.com" {
+				t.Fatal("no published Agent release must not download assets")
+			}
+			return releaseListResponse(r, releases), nil
+		})})
+		update, err := client.Check(t.Context(), "2026.11.9", runtime.GOOS, runtime.GOARCH)
+		if err != nil || update != nil || requests != 1 {
+			t.Fatalf("transition check: update=%+v error=%v requests=%d", update, err, requests)
+		}
+	}
+}
+
+func TestReleaseListFailuresDoNotDownloadAssets(t *testing.T) {
+	for _, fixture := range []struct {
+		status int
+		body   string
+	}{
+		{http.StatusForbidden, `{"message":"API rate limit exceeded"}`},
+		{http.StatusBadGateway, "Bad Gateway"},
+		{http.StatusOK, "{"},
+		{http.StatusOK, "null"},
+		{http.StatusOK, `{}`},
+	} {
+		t.Run(fmt.Sprintf("%d/%s", fixture.status, fixture.body), func(t *testing.T) {
+			requests := 0
+			client := NewGitHubClient(&http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+				requests++
+				if r.URL.Host != "api.github.com" {
+					t.Fatal("failed lookup caused an asset download")
+				}
+				return &http.Response{StatusCode: fixture.status, Status: http.StatusText(fixture.status), Header: make(http.Header), Body: io.NopCloser(strings.NewReader(fixture.body)), Request: r}, nil
+			})})
+			if _, err := client.Check(t.Context(), "2026.11.9", runtime.GOOS, runtime.GOARCH); err == nil || requests != 1 {
+				t.Fatalf("failed release lookup: requests=%d error=%v", requests, err)
 			}
 		})
 	}
@@ -160,7 +239,7 @@ func TestReleaseBinaryFallbackDoesNotMixSources(t *testing.T) {
 	update := model.UpdateInfo{
 		Version: "2026.11.2", OS: "linux", Arch: runtime.GOARCH,
 		SHA256: hex.EncodeToString(hash[:]),
-		URL:    "https://mirror.example/github.com/chaeoi/baize/releases/download/2026.11.2/" + asset,
+		URL:    "https://mirror.example/github.com/chaeoi/baize/releases/download/agent-2026.11.2/" + asset,
 	}
 	for _, failure := range []string{"http-error", "partial-body", "wrong-checksum", "both-unavailable"} {
 		t.Run(failure, func(t *testing.T) {
@@ -179,7 +258,7 @@ func TestReleaseBinaryFallbackDoesNotMixSources(t *testing.T) {
 					case "wrong-checksum":
 						body = strings.NewReader("corrupt mirror response")
 					}
-				} else if r.URL.String() != "https://github.com/chaeoi/baize/releases/download/2026.11.2/"+asset {
+				} else if r.URL.String() != "https://github.com/chaeoi/baize/releases/download/agent-2026.11.2/"+asset {
 					t.Fatalf("fallback changed the pinned asset: %s", r.URL)
 				} else if failure == "both-unavailable" {
 					status = http.StatusServiceUnavailable

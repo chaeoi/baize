@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,7 +37,7 @@ func (c *githubClient) Check(ctx context.Context, current, goos, arch string) (*
 		return nil, fmt.Errorf("unsupported update platform %s/%s", goos, arch)
 	}
 	version, err := c.latestVersion(ctx)
-	if err != nil {
+	if err != nil || version == "" {
 		return nil, err
 	}
 	newer, err := newerVersion(version, current)
@@ -58,37 +60,49 @@ func (c *githubClient) Check(ctx context.Context, current, goos, arch string) (*
 }
 
 func (c *githubClient) latestVersion(ctx context.Context) (string, error) {
-	address := "https://github.com/" + updateRepository + "/releases/latest?cachebust=" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	request, err := http.NewRequestWithContext(ctx, http.MethodHead, address, nil)
-	if err != nil {
-		return "", err
+	latest := ""
+	var highest [3]uint64
+	query := "&cachebust=" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	for page := 1; ; page++ {
+		address := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=100&page=%d%s", updateRepository, page, query)
+		data, err := c.downloadBytes(ctx, address, 4<<20)
+		if err != nil {
+			return "", err
+		}
+		var releases []struct {
+			Tag        string `json:"tag_name"`
+			Draft      bool   `json:"draft"`
+			Prerelease bool   `json:"prerelease"`
+		}
+		if err := json.Unmarshal(data, &releases); err != nil {
+			return "", fmt.Errorf("decode Agent releases: %w", err)
+		}
+		if releases == nil {
+			return "", fmt.Errorf("GitHub returned an invalid release list")
+		}
+		for _, release := range releases {
+			if release.Draft || release.Prerelease || !strings.HasPrefix(release.Tag, "agent-") {
+				continue
+			}
+			version := strings.TrimPrefix(release.Tag, "agent-")
+			number, err := releaseVersion(version)
+			if err != nil || number[2] == 0 {
+				continue
+			}
+			if slices.Compare(number[:], highest[:]) > 0 {
+				latest, highest = version, number
+			}
+		}
+		if len(releases) < 100 {
+			return latest, nil
+		}
 	}
-	request.Header.Set("User-Agent", "baize-agent/update")
-	client := *c.http
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 300 || response.StatusCode >= 400 {
-		return "", fmt.Errorf("latest release lookup returned %s", response.Status)
-	}
-	location, err := response.Location()
-	if err != nil {
-		return "", err
-	}
-	prefix := "/" + updateRepository + "/releases/tag/"
-	if location.Scheme != "https" || location.Host != "github.com" || !strings.HasPrefix(location.Path, prefix) {
-		return "", fmt.Errorf("GitHub returned an invalid release location")
-	}
-	return strings.TrimPrefix(location.Path, prefix), nil
 }
 
 func (c *githubClient) checkRelease(ctx context.Context, base, version, goos, arch string) (*model.UpdateInfo, error) {
 	query := "?cachebust=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	// Pin all remaining downloads to the version we just checked.
-	release := base + "/download/" + version
+	release := base + "/download/agent-" + version
 	asset := "baize-agent-" + goos + "-" + arch
 	sums, err := c.downloadBytes(ctx, release+"/SHA256SUMS"+query, 64*1024)
 	if err != nil {
@@ -101,39 +115,35 @@ func (c *githubClient) checkRelease(ctx context.Context, base, version, goos, ar
 	return &model.UpdateInfo{Version: version, OS: goos, Arch: arch, SHA256: digest, URL: release + "/" + asset}, nil
 }
 
-func newerVersion(latest, current string) (bool, error) {
-	parse := func(value string) ([3]uint64, error) {
-		var result [3]uint64
-		parts := strings.Split(value, ".")
-		if len(parts) != 3 || len(parts[0]) != 4 {
-			return result, fmt.Errorf("invalid release version %q; expected year.month.sequence", value)
-		}
-		for index, part := range parts {
-			number, err := strconv.ParseUint(part, 10, 32)
-			if err != nil || strconv.FormatUint(number, 10) != part {
-				return result, fmt.Errorf("invalid release version %q", value)
-			}
-			result[index] = number
-		}
-		if result[0] < 2000 || result[1] < 1 || result[1] > 12 {
+func releaseVersion(value string) ([3]uint64, error) {
+	var result [3]uint64
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 || len(parts[0]) != 4 {
+		return result, fmt.Errorf("invalid release version %q; expected year.month.sequence", value)
+	}
+	for index, part := range parts {
+		number, err := strconv.ParseUint(part, 10, 32)
+		if err != nil || strconv.FormatUint(number, 10) != part {
 			return result, fmt.Errorf("invalid release version %q", value)
 		}
-		return result, nil
+		result[index] = number
 	}
-	want, err := parse(latest)
+	if result[0] < 2000 || result[1] < 1 || result[1] > 12 {
+		return result, fmt.Errorf("invalid release version %q", value)
+	}
+	return result, nil
+}
+
+func newerVersion(latest, current string) (bool, error) {
+	want, err := releaseVersion(latest)
 	if err != nil {
 		return false, err
 	}
-	have, err := parse(current)
+	have, err := releaseVersion(current)
 	if err != nil {
 		return false, err
 	}
-	for index := range want {
-		if want[index] != have[index] {
-			return want[index] > have[index], nil
-		}
-	}
-	return false, nil
+	return slices.Compare(want[:], have[:]) > 0, nil
 }
 
 func (c *githubClient) downloadBytes(ctx context.Context, address string, limit int64) ([]byte, error) {
@@ -142,6 +152,7 @@ func (c *githubClient) downloadBytes(ctx context.Context, address string, limit 
 		return nil, err
 	}
 	request.Header.Set("User-Agent", "baize-agent/update")
+	request.Header.Set("Accept", "application/vnd.github+json")
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, err
@@ -187,7 +198,7 @@ func (c *githubClient) Download(ctx context.Context, update model.UpdateInfo, wr
 	}
 	addresses := []string{update.URL}
 	if parsed.Host != "github.com" {
-		addresses = append(addresses, "https://github.com/"+updateRepository+"/releases/download/"+update.Version+"/baize-agent-"+update.OS+"-"+update.Arch)
+		addresses = append(addresses, "https://github.com/"+updateRepository+"/releases/download/agent-"+update.Version+"/baize-agent-"+update.OS+"-"+update.Arch)
 	}
 	// Stage each source separately so a partial mirror response cannot be mixed
 	// with the fallback download in the caller's file or checksum stream.

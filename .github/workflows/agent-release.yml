@@ -198,7 +198,7 @@ jobs:
     if: ${{ !cancelled() && needs.version.result == 'success' && needs.version.outputs.skip != 'true' && (needs.build-agent.result == 'success' || (needs.build-agent.result == 'skipped' && needs.version.outputs.released == 'true')) && needs.dashboard.result == 'success' }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      PRODUCT_NAME: Baize
+      PRODUCT_NAME: Baize Agent
       ASSET_PREFIX: baize-agent
     runs-on: ubuntu-latest
     steps:
@@ -304,6 +304,7 @@ jobs:
                   if not Path("dist", name).is_file():
                       raise RuntimeError(f"missing release artifact: {name}")
               notes = subprocess.check_output(["git", "for-each-ref", "--format=%(contents)", f"refs/tags/{version}"], text=True).strip()
+              notes += "\n\n本次为自动更新过渡版本：保留纯数字标签，供旧版 Agent 自动升级；程序已支持按 `agent-` 标签筛选后续正式版本。尚无此类正式版本时，Agent 正常等待。\n"
               notes += "\n\n## 安装与升级\n\n"
               documentation = f"https://github.com/{repository}/blob/{version}/README.md"
               image = f"{os.environ['DOCKERHUB_USERNAME']}/baize:{version}"
