@@ -10,7 +10,7 @@ import (
 func TestBuildUsesBuiltInRobotProfile(t *testing.T) {
 	cfg, err := Build(AgentConfig{
 		UUID: "7fd34256-bf3a-4cf6-8da0-fbce40f34d11", RobotCode: "TEST",
-		RobotModel: "2m_v0.1.2", DashboardURL: "http://dashboard:8080",
+		RobotModel: "2m_v0.1.2", DashboardURL: "http://dashboard:5037",
 		Token: "long-enough-agent-token",
 	})
 	if err != nil {
@@ -27,7 +27,7 @@ func TestBuildUsesBuiltInRobotProfile(t *testing.T) {
 func TestBuildRejectsUnknownRobotModel(t *testing.T) {
 	_, err := Build(AgentConfig{
 		UUID: "7fd34256-bf3a-4cf6-8da0-fbce40f34d11", RobotCode: "TEST",
-		RobotModel: "not_a_model", DashboardURL: "http://dashboard:8080",
+		RobotModel: "not_a_model", DashboardURL: "http://dashboard:5037",
 		Token: "long-enough-agent-token",
 	})
 	if err == nil {

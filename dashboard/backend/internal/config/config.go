@@ -54,7 +54,7 @@ type DashboardConfig struct {
 func Default() Config {
 	return Config{Dashboard: DashboardConfig{
 		AgentToken:            "",
-		Listen:                ":8080",
+		Listen:                ":5037",
 		DataDir:               "/dashboard/data/control",
 		RecordingDir:          "/dashboard/data/recordings",
 		HistoryDataDir:        "/dashboard/data/history",

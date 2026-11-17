@@ -30,6 +30,6 @@ COPY --from=backend-builder /out/baize /dashboard/app
 COPY dashboard/config.yml.example /dashboard/config.yaml.example
 COPY dashboard/backend/entrypoint.sh /entrypoint.sh
 RUN chmod 0755 /entrypoint.sh
-EXPOSE 8080
+EXPOSE 5037
 VOLUME ["/dashboard/data"]
 ENTRYPOINT ["/entrypoint.sh"]

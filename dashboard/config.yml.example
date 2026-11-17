@@ -1,6 +1,6 @@
 dashboard:
   agent_token: ""
-  listen: ":8080"
+  listen: ":5037"
   data_dir: "/dashboard/data/control"
   recording_dir: "/dashboard/data/recordings"
   history_data_dir: "/dashboard/data/history"
