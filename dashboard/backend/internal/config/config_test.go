@@ -77,7 +77,7 @@ func TestHistorySampleIntervalMatchesAgentReportCadence(t *testing.T) {
 
 func TestWriteAgentToken(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	contents := []byte("dashboard:\n  listen: \":8080\"\n  data_dir: \"/control\"\n  history_data_dir: \"/history\"\n")
+	contents := []byte("dashboard:\n  listen: \":5037\"\n  data_dir: \"/control\"\n  history_data_dir: \"/history\"\n")
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
