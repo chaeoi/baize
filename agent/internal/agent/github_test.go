@@ -184,7 +184,7 @@ func TestLatestAgentReleaseFiltersAndPaginates(t *testing.T) {
 	}
 }
 
-func TestTransitionReleaseWaitsForFirstPrefixedRelease(t *testing.T) {
+func TestCheckWithoutPublishedAgentRelease(t *testing.T) {
 	for _, releases := range [][]map[string]any{
 		{},
 		{{"tag_name": "2026.11.9"}},
@@ -200,7 +200,7 @@ func TestTransitionReleaseWaitsForFirstPrefixedRelease(t *testing.T) {
 		})})
 		update, err := client.Check(t.Context(), "2026.11.9", runtime.GOOS, runtime.GOARCH)
 		if err != nil || update != nil || requests != 1 {
-			t.Fatalf("transition check: update=%+v error=%v requests=%d", update, err, requests)
+			t.Fatalf("update=%+v error=%v requests=%d", update, err, requests)
 		}
 	}
 }

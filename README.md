@@ -172,8 +172,8 @@ curl -fsSL https://gitwarp.canghai.org/raw.githubusercontent.com/chaeoi/baize/ma
 ```
 
 下载脚本只负责选择架构、校验 Release，然后把安装参数传给
-`baize-agent service install`。安装后的 Agent 按 `update.check_interval` 定时检查
-GitHub 正式发布的 Agent Release，启动约 5 秒后首次检查、默认每 24 小时。
+`baize-agent service install`。启用 `update.enabled` 后，Agent 每次启动约 2 分钟后自动检查一次。
+需要再次检查时，可手动执行 `baize-agent service update`。
 检查时分页读取 GitHub Release 列表，只选择标签为 `agent-年.月.序号` 的正式版本，
 排除草稿、预发布版本和其他组件。去掉 `agent-` 后按年、月、序号比较整数，
 程序和管理后台仍显示纯版本号。只有远端版本更高时，才从该版本的完整固定标签
@@ -183,15 +183,12 @@ GitHub 正式发布的 Agent Release，启动约 5 秒后首次检查、默认�
 手动和自动更新使用同一把锁，持锁后复核实际安装版本，避免过时的候选版本覆盖较新的程序。
 尚未构建成功并发布的源码提交不会安装到机器人上，更新不依赖 Dashboard 在线或参与发布。
 
-当前发布的是纯数字标签的过渡版本，内置上述更新检测逻辑。旧版 Agent 仍通过
-GitHub `releases/latest` 自动升级到此版本；尚无 `agent-` 正式 Release 时，新逻辑正常等待。
-后续切换组件标签时，需要保留纯数字过渡 Release 为 GitHub Latest，
-供尚未迁移的设备升级；新 Agent 独立筛选 `agent-` Release，不依赖该标记。
-
-推送到 `main` 后自动编号、创建 tag，并发布同版本的 Agent 和 Dashboard 镜像，无需手动打标签。
+推送到 `main` 后自动编号并创建 `agent-年.月.发布序号` 标签。
+GitHub Release 使用此标签，Dashboard 镜像使用纯数字版本号。
 Dashboard 先上传固定版本镜像，Agent 附件齐全并发布 Release 后才更新镜像的 `latest`；收尾失败时重跑即可补齐。
+GitHub Latest 随最新的 Agent 正式版更新，供一键安装脚本下载。
 版本采用 `年.月.发布序号`，年月取 commit 提交时间的 UTC 年月。
-没有同月版本标签时从 `.1` 开始；新的发布提交取同月最大序号加一，可以递增到 `.10`、`.100`。
+没有同月版本标签时从 `.1` 开始。新的发布提交沿用历史序号，取同月最大序号加一。
 同一 commit 重跑沿用原编号，已发布的程序和镜像不覆盖。
 版本按年、月、序号逐项比较整数，`2026.1.1` 高于 `2025.12.100`。
 一次推送多个提交时只发布最后一个提交，序号只增加一；首次发布前的历史提交不计入序号。

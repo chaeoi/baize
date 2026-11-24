@@ -47,6 +47,9 @@ agent:
 system:
   enabled: true
   disk_paths: ["/"]
+update:
+  enabled: false
+  check_interval: 24h
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -57,6 +60,9 @@ system:
 	}
 	if cfg.Agent.ReportInterval.Value().Seconds() != 3 || cfg.Motor.Topic != "/motor/q2w_upper_motor_joint_state" || cfg.BMS.ROSTopic != "/batcan/data" {
 		t.Fatalf("unexpected loaded config: %+v", cfg)
+	}
+	if cfg.Update.Enabled {
+		t.Fatal("old config should still disable automatic updates")
 	}
 }
 

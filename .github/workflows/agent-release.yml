@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.number.outputs.version }}
+      tag: ${{ steps.number.outputs.tag }}
       released: ${{ steps.number.outputs.released }}
       skip: ${{ steps.number.outputs.skip }}
     steps:
@@ -57,8 +58,8 @@ jobs:
               return json.loads(result.stdout)
 
 
-          def output(version="", released=False, skip=False):
-              values = {"version": version, "released": str(released).lower(), "skip": str(skip).lower()}
+          def output(version="", tag="", released=False, skip=False):
+              values = {"version": version, "tag": tag, "released": str(released).lower(), "skip": str(skip).lower()}
               with open(os.environ["GITHUB_OUTPUT"], "a") as destination:
                   destination.write("".join(f"{name}={value}\n" for name, value in values.items()))
 
@@ -69,15 +70,15 @@ jobs:
           tags = []
           for line in git("for-each-ref", "--format=%(refname:strip=2) %(objectname) %(*objectname)", "refs/tags").splitlines():
               name, target, *peeled = line.split()
-              number = parse_version(name)
+              number = parse_version(name.removeprefix("agent-"))
               if number:
-                  tags.append((number, peeled[0] if peeled else target))
-          assigned = [number for number, target in tags if target == head]
+                  tags.append((number, peeled[0] if peeled else target, name))
+          assigned = [number for number, target, name in tags if target == head and name.startswith("agent-")]
           if assigned:
               number = max(assigned)
           else:
               # An older queued commit must not acquire a higher version than its successor.
-              for target in {target for _, target in tags}:
+              for target in {target for _, target, _ in tags}:
                   result = subprocess.run(["git", "merge-base", "--is-ancestor", head, target])
                   if result.returncode == 0:
                       output(skip=True)
@@ -85,20 +86,21 @@ jobs:
                       raise SystemExit(0)
                   if result.returncode != 1:
                       raise RuntimeError("cannot compare release commit ancestry")
-              sequence = max((number[2] for number, _ in tags if number[:2] == prefix), default=0) + 1
+              sequence = max((number[2] for number, _, _ in tags if number[:2] == prefix), default=0) + 1
               number = (*prefix, sequence)
           if not 0 < number[2] <= 4294967295:
               raise RuntimeError("release sequence is out of range")
           version = ".".join(map(str, number))
+          tag = f"agent-{version}"
           if not assigned:
               subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
               subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
               subject = git("show", "-s", "--format=%s", head)
-              subprocess.run(["git", "tag", "-a", "--cleanup=verbatim", version, head, "-m", f"## 更新内容\n\n- {subject}\n"], check=True)
-              subprocess.run(["git", "push", "origin", f"refs/tags/{version}"], check=True)
-          existing = release(f"tags/{version}")
-          output(version, released=bool(existing and not existing["draft"]))
-          print(f"Release version: {version}")
+              subprocess.run(["git", "tag", "-a", "--cleanup=verbatim", tag, head, "-m", f"## 更新内容\n\n- {subject}\n"], check=True)
+              subprocess.run(["git", "push", "origin", f"refs/tags/{tag}"], check=True)
+          existing = release(f"tags/{tag}")
+          output(version, tag, released=bool(existing and not existing["draft"]))
+          print(f"Release tag: {tag}")
           PYCODE
 
   go-test:
@@ -198,6 +200,7 @@ jobs:
     if: ${{ !cancelled() && needs.version.result == 'success' && needs.version.outputs.skip != 'true' && (needs.build-agent.result == 'success' || (needs.build-agent.result == 'skipped' && needs.version.outputs.released == 'true')) && needs.dashboard.result == 'success' }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
       PRODUCT_NAME: Baize Agent
       ASSET_PREFIX: baize-agent
     runs-on: ubuntu-latest
@@ -218,8 +221,8 @@ jobs:
           import subprocess
 
           repository = os.environ["GITHUB_REPOSITORY"]
-          version = os.environ["VERSION"]
-          result = subprocess.run(["gh", "api", f"repos/{repository}/releases/tags/{version}"], text=True, capture_output=True)
+          tag = os.environ["RELEASE_TAG"]
+          result = subprocess.run(["gh", "api", f"repos/{repository}/releases/tags/{tag}"], text=True, capture_output=True)
           if result.returncode and "HTTP 404" not in result.stderr:
               raise RuntimeError(result.stderr)
           released = not result.returncode and not json.loads(result.stdout)["draft"]
@@ -261,6 +264,7 @@ jobs:
 
 
           def number(tag):
+              tag = tag.removeprefix("agent-")
               if re.fullmatch(r"[2-9][0-9]{3}\.([1-9]|1[0-2])\.[1-9][0-9]*", tag):
                   return tuple(map(int, tag.split(".")))
               return None
@@ -272,11 +276,11 @@ jobs:
 
 
           def published_versions(items):
-              return [
-                  number(item["tag_name"])
-                  for item in items
-                  if not item["draft"] and not item["prerelease"] and number(item["tag_name"])
-              ]
+              for item in items:
+                  tag = item["tag_name"]
+                  parsed = number(tag)
+                  if not item["draft"] and not item["prerelease"] and parsed:
+                      yield parsed, tag
 
 
           def validate_assets(release, local=False):
@@ -292,61 +296,61 @@ jobs:
 
           repository = os.environ["GITHUB_REPOSITORY"]
           version = os.environ["VERSION"]
+          tag = os.environ["RELEASE_TAG"]
           product = os.environ["PRODUCT_NAME"]
           stem = os.environ["ASSET_PREFIX"]
           files = [f"{stem}-linux-amd64", f"{stem}-linux-arm64", "SHA256SUMS"]
-          if subprocess.check_output(["git", "rev-parse", f"refs/tags/{version}^{{commit}}"], text=True).strip() != os.environ["GITHUB_SHA"]:
+          if subprocess.check_output(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], text=True).strip() != os.environ["GITHUB_SHA"]:
               raise RuntimeError("release tag belongs to another commit")
           all_releases = releases()
-          existing = next((item for item in all_releases if item["tag_name"] == version), None)
+          existing = next((item for item in all_releases if item["tag_name"] == tag), None)
           if not existing or existing["draft"]:
               for name in files:
                   if not Path("dist", name).is_file():
                       raise RuntimeError(f"missing release artifact: {name}")
-              notes = subprocess.check_output(["git", "for-each-ref", "--format=%(contents)", f"refs/tags/{version}"], text=True).strip()
-              notes += "\n\n本次为自动更新过渡版本：保留纯数字标签，供旧版 Agent 自动升级；程序已支持按 `agent-` 标签筛选后续正式版本。尚无此类正式版本时，Agent 正常等待。\n"
+              notes = subprocess.check_output(["git", "for-each-ref", "--format=%(contents)", f"refs/tags/{tag}"], text=True).strip()
               notes += "\n\n## 安装与升级\n\n"
-              documentation = f"https://github.com/{repository}/blob/{version}/README.md"
+              documentation = f"https://github.com/{repository}/blob/{tag}/README.md"
               image = f"{os.environ['DOCKERHUB_USERNAME']}/baize:{version}"
               notes += f"- Dashboard 镜像：`{image}`\n- Agent 安装、配置和服务管理：[部署文档]({documentation}#agent)。\n"
               notes += "\n## 下载\n\n| Linux 架构 | 程序 |\n|---|---|\n"
               for arch in ["amd64", "arm64"]:
                   name = f"{stem}-linux-{arch}"
-                  notes += f"| {arch} | [{name}](https://github.com/{repository}/releases/download/{version}/{name}) |\n"
+                  notes += f"| {arch} | [{name}](https://github.com/{repository}/releases/download/{tag}/{name}) |\n"
               notes += "\nAgent 已内嵌 ROS2 订阅器。机器人需要 ROS2 Humble 运行环境。\n"
               notes += "\n## SHA-256\n\n下载附件 `SHA256SUMS` 后，可用 `sha256sum --check --ignore-missing SHA256SUMS` 校验。\n\n```text\n"
               notes += Path("dist/SHA256SUMS").read_text() + "```\n"
-              previous = max((value for value in published_versions(all_releases) if value < number(version)), default=None)
+              current = number(version)
+              previous = max((entry for entry in published_versions(all_releases) if entry[0] < current), default=None)
               if previous:
-                  previous_tag = ".".join(map(str, previous))
-                  generated = json.loads(gh("api", "--method", "POST", f"repos/{repository}/releases/generate-notes", "-f", f"tag_name={version}", "-f", f"previous_tag_name={previous_tag}"))
+                  generated = json.loads(gh("api", "--method", "POST", f"repos/{repository}/releases/generate-notes", "-f", f"tag_name={tag}", "-f", f"previous_tag_name={previous[1]}"))
                   notes += "\n" + generated["body"] + "\n"
               notes_file = Path(os.environ["RUNNER_TEMP"], "release-notes.md")
               notes_file.write_text(notes)
               if existing:
-                  gh("release", "edit", version, "--title", f"{product} {version}", "--notes-file", str(notes_file))
+                  gh("release", "edit", tag, "--title", f"{product} {version}", "--notes-file", str(notes_file))
               else:
-                  gh("release", "create", version, "--draft", "--verify-tag", "--title", f"{product} {version}", "--notes-file", str(notes_file))
+                  gh("release", "create", tag, "--draft", "--verify-tag", "--title", f"{product} {version}", "--notes-file", str(notes_file))
               # Draft attachments can be replaced; published attachments are never uploaded again.
-              gh("release", "upload", version, *(f"dist/{name}" for name in files), "--clobber")
-              existing = next(item for item in releases() if item["tag_name"] == version)
+              gh("release", "upload", tag, *(f"dist/{name}" for name in files), "--clobber")
+              existing = next(item for item in releases() if item["tag_name"] == tag)
               validate_assets(existing, local=True)
-              gh("release", "edit", version, "--draft=false", "--latest=false")
+              gh("release", "edit", tag, "--draft=false", "--latest=false")
           else:
               validate_assets(existing)
 
           # Failed-job reruns reuse earlier job outputs, so decide latest here from published releases.
           all_releases = releases()
-          promote = number(version) == max(published_versions(all_releases))
+          promote = (number(version), tag) == max(published_versions(all_releases))
           if promote:
               latest = subprocess.run(["gh", "api", f"repos/{repository}/releases/latest"], text=True, capture_output=True)
               if latest.returncode and "HTTP 404" not in latest.stderr:
                   raise RuntimeError(latest.stderr)
-              if latest.returncode or json.loads(latest.stdout)["tag_name"] != version:
-                  gh("release", "edit", version, "--latest")
+              if latest.returncode or json.loads(latest.stdout)["tag_name"] != tag:
+                  gh("release", "edit", tag, "--latest")
           with open(os.environ["GITHUB_OUTPUT"], "a") as destination:
               destination.write(f"latest={str(promote).lower()}\n")
-          print(f"Published {version}; latest={str(promote).lower()}")
+          print(f"Published {tag}; latest={str(promote).lower()}")
           PYCODE
 
       - name: 设置 Docker Buildx
