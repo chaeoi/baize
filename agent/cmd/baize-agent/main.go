@@ -224,7 +224,7 @@ func run(ctx context.Context, cfg config.Config, configPath string) error {
 		return nil
 	}
 	if cfg.Update.Enabled && version != "dev" {
-		go updateLoop(ctx, cfg, configPath, httpClient, updates)
+		go checkUpdateAfterStartup(ctx, cfg, configPath, httpClient, updates)
 	}
 	ticker := time.NewTicker(cfg.Agent.RawBatchInterval.Value())
 	defer ticker.Stop()
@@ -262,64 +262,52 @@ func run(ctx context.Context, cfg config.Config, configPath string) error {
 	}
 }
 
-func updateLoop(ctx context.Context, cfg config.Config, configPath string, httpClient *http.Client, updates chan<- updateHandoff) {
+func checkUpdateAfterStartup(ctx context.Context, cfg config.Config, configPath string, httpClient *http.Client, updates chan<- updateHandoff) {
+	timer := time.NewTimer(2 * time.Minute)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+
 	executable, err := os.Executable()
 	if err != nil {
 		slog.Error("find Agent executable for updates", "error", err)
 		return
 	}
 	client := agent.NewGitHubClient(httpClient)
-	check := func() {
-		checkCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
-		defer cancel()
-		update, err := client.Check(checkCtx, version, runtime.GOOS, runtime.GOARCH)
-		if err != nil {
-			slog.Warn("check update", "error", err)
-			return
-		}
-		if update == nil {
-			return
-		}
-		slog.Info("prepare agent update", "from", version, "to", update.Version)
-		handoff := updateHandoff{ready: make(chan error, 1), finished: make(chan error, 1)}
-		err = agent.ApplyUpdate(ctx, client, *update, executable, configPath, func() error {
-			select {
-			case updates <- handoff:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			select {
-			case err := <-handoff.ready:
-				return err
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		})
-		handoff.finished <- err
-		if errors.Is(err, agent.ErrUpdateSuperseded) {
-			slog.Info("skip superseded Agent update", "reason", err)
-		} else if err != nil {
-			slog.Error("apply update", "error", err)
-		} else {
-			slog.Info("Agent updated; restarting service", "version", update.Version)
-		}
-	}
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
+	checkCtx, cancel := context.WithTimeout(ctx, cfg.Agent.HTTPTimeout.Value())
+	update, err := client.Check(checkCtx, version, runtime.GOOS, runtime.GOARCH)
+	cancel()
+	if err != nil {
+		slog.Warn("check update", "error", err)
 		return
-	case <-timer.C:
-		check()
 	}
-	ticker := time.NewTicker(cfg.Update.CheckInterval.Value())
-	defer ticker.Stop()
-	for {
+	if update == nil {
+		return
+	}
+	slog.Info("prepare agent update", "from", version, "to", update.Version)
+	handoff := updateHandoff{ready: make(chan error, 1), finished: make(chan error, 1)}
+	err = agent.ApplyUpdate(ctx, client, *update, executable, configPath, func() error {
 		select {
+		case updates <- handoff:
 		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			check()
+			return ctx.Err()
 		}
+		select {
+		case err := <-handoff.ready:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	handoff.finished <- err
+	if errors.Is(err, agent.ErrUpdateSuperseded) {
+		slog.Info("skip superseded Agent update", "reason", err)
+	} else if err != nil {
+		slog.Error("apply update", "error", err)
+	} else {
+		slog.Info("Agent updated; restarting service", "version", update.Version)
 	}
 }

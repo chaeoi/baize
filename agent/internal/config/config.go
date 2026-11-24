@@ -96,13 +96,13 @@ type BMSConfig struct {
 }
 
 type UpdateConfig struct {
-	Enabled       bool     `json:"enabled" yaml:"enabled"`
-	CheckInterval Duration `json:"check_interval" yaml:"check_interval"`
+	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
 type fileUpdateConfig struct {
-	Enabled       bool     `yaml:"enabled"`
-	CheckInterval Duration `yaml:"check_interval"`
+	Enabled bool `yaml:"enabled"`
+	// Older installations still have this field in their config.
+	CheckInterval yaml.Node `yaml:"check_interval,omitempty"`
 }
 
 // fileConfig deliberately excludes motor and BMS sections. Robot capability is
@@ -153,10 +153,7 @@ func Default() Config {
 			ROSMessageType: "diagnostic_msgs/msg/DiagnosticArray",
 			ROSSetup:       []string{"/opt/ros/humble/setup.bash"},
 		},
-		Update: UpdateConfig{
-			Enabled:       true,
-			CheckInterval: Duration(24 * time.Hour),
-		},
+		Update: UpdateConfig{Enabled: true},
 	}
 }
 
@@ -203,7 +200,7 @@ func Load(path string) (Config, error) {
 		cfg.GPU = *file.GPU
 	}
 	if file.Update != nil {
-		cfg.Update = UpdateConfig{Enabled: file.Update.Enabled, CheckInterval: file.Update.CheckInterval}
+		cfg.Update = UpdateConfig{Enabled: file.Update.Enabled}
 	}
 	return build(cfg)
 }
@@ -216,7 +213,7 @@ func Marshal(cfg Config) ([]byte, error) {
 			ReportInterval: cfg.Agent.ReportInterval, HTTPTimeout: cfg.Agent.HTTPTimeout,
 			RawBatchInterval: cfg.Agent.RawBatchInterval, RawCacheBytes: cfg.Agent.RawCacheBytes},
 		System: &cfg.System, GPU: &cfg.GPU,
-		Update: &fileUpdateConfig{Enabled: cfg.Update.Enabled, CheckInterval: cfg.Update.CheckInterval},
+		Update: &fileUpdateConfig{Enabled: cfg.Update.Enabled},
 	})
 }
 
@@ -242,9 +239,6 @@ func build(cfg Config) (Config, error) {
 	}
 	if cfg.GPU.Timeout.Value() == 0 {
 		cfg.GPU.Timeout = defaults.GPU.Timeout
-	}
-	if cfg.Update.CheckInterval.Value() == 0 {
-		cfg.Update.CheckInterval = defaults.Update.CheckInterval
 	}
 	profile, err := profileForModel(cfg.Agent.RobotModel)
 	if err != nil {
@@ -309,9 +303,6 @@ func (c *Config) Validate() error {
 			return errors.New("BMS ROS2 topic or message_type is invalid")
 		}
 
-	}
-	if c.Update.Enabled && c.Update.CheckInterval.Value() < 10*time.Second {
-		return errors.New("update.check_interval must be at least 10s")
 	}
 	return nil
 }

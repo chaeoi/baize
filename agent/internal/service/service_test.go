@@ -38,7 +38,6 @@ func TestPartialInstallPreservesGenericSettings(t *testing.T) {
 	cfg.GPU.Enabled = false
 	cfg.GPU.Command = "/usr/local/bin/custom-smi"
 	cfg.Update.Enabled = false
-	cfg.Update.CheckInterval = config.Duration(5 * time.Minute)
 	content, err := config.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +49,9 @@ func TestPartialInstallPreservesGenericSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(string(plan.content), "check_interval") {
+		t.Fatal("rewritten config retained the retired update interval")
+	}
 	if err := os.WriteFile(installedConfig, plan.content, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +59,7 @@ func TestPartialInstallPreservesGenericSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Agent.RobotCode != "M100" || got.Agent.UUID != cfg.Agent.UUID || got.System.Enabled || got.GPU.Enabled || got.Update.Enabled || got.GPU.Command != cfg.GPU.Command || got.Update.CheckInterval != cfg.Update.CheckInterval || strings.Join(got.System.DiskPaths, ",") != "/,/data" {
+	if got.Agent.RobotCode != "M100" || got.Agent.UUID != cfg.Agent.UUID || got.System.Enabled || got.GPU.Enabled || got.Update.Enabled || got.GPU.Command != cfg.GPU.Command || strings.Join(got.System.DiskPaths, ",") != "/,/data" {
 		t.Fatalf("unrelated settings changed: %+v", got)
 	}
 }

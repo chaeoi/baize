@@ -511,7 +511,7 @@ func defaultConfig(uuid string) string {
 	}
 	lines.WriteString("model: \"\"\n\nagent:\n  uuid: ")
 	lines.WriteString(yamlString(uuid))
-	lines.WriteString("\n  robot_code: \"\"\n  dashboard_url: \"\"\n  token: \"\"\n  report_interval: \"2s\"\n  http_timeout: \"10s\"\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n  check_interval: \"24h\"\n")
+	lines.WriteString("\n  robot_code: \"\"\n  dashboard_url: \"\"\n  token: \"\"\n  report_interval: \"2s\"\n  http_timeout: \"10s\"\n\nsystem:\n  enabled: true\n  disk_paths: [\"/\"]\n\ngpu:\n  enabled: true\n  command: \"nvidia-smi\"\n  timeout: \"3s\"\n\nupdate:\n  enabled: true\n")
 	return lines.String()
 }
 
